@@ -250,11 +250,13 @@ add_library(wabt STATIC
   src/wat-writer.cc
   ${WAST_LEXER_GEN_CC}
 
-  # TODO(binji): Move this into its own library?
+  # TODO(binji): Interpreter files. Move this into its own library?
+  include/wasm-c.cc
   src/interp/binary-reader-interp.cc
   src/interp/interp.cc
   src/interp/interp-disassemble.cc
   src/interp/interp-trace.cc
+  src/interp/wasm-api.cc
 )
 
 
@@ -415,6 +417,7 @@ if (NOT EMSCRIPTEN)
       src/test-string-view.cc
       src/test-filenames.cc
       src/test-utf8.cc
+      src/test-wasm-api.cc
       src/test-wast-parser.cc
       third_party/gtest/googletest/src/gtest_main.cc
     )
