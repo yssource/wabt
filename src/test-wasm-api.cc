@@ -363,3 +363,85 @@ TEST(WasmApi, ExportType) {
   test("table", *tt);
   test("memory", *mt);
 }
+
+namespace {
+
+struct Dummy {
+  int a, b;
+};
+
+class WasmApiRefTest : public ::testing::Test {
+ protected:
+  virtual void SetUp() {
+    auto config = Config::make();
+    auto engine = Engine::make(std::move(config));
+    store_ = Store::make(engine.get());
+
+    finalizer_count_ = 0;
+    info1_ = 42;
+    info2_ = {314, 159};
+  }
+
+  virtual void TearDown() {
+    EXPECT_EQ(2, finalizer_count_);
+  }
+
+  void TestRef(Ref* ref) {
+    // Initially there is no host info.
+    EXPECT_EQ(nullptr, ref->get_host_info());
+
+    ref->set_host_info(&info1_, [](void* info) {
+      EXPECT_EQ(&info1_, info);
+      EXPECT_EQ(42, *static_cast<int*>(info));
+      finalizer_count_++;
+    });
+
+    auto ref_copy = ref->copy();
+
+    // Test that we can read the same host info on another ref copy.
+    EXPECT_EQ(&info1_, ref->get_host_info());
+    EXPECT_EQ(&info1_, ref_copy->get_host_info());
+
+    // Test that both finalizers will be called.
+    ref_copy->set_host_info(&info2_, [](void* info) {
+      auto* dummy = static_cast<Dummy*>(info);
+      EXPECT_EQ(&info2_, dummy);
+      EXPECT_EQ(314, dummy->a);
+      EXPECT_EQ(159, dummy->b);
+      finalizer_count_++;
+    });
+
+    // Test that get_host_info returns the most recently set info.
+    EXPECT_EQ(&info2_, ref->get_host_info());
+    EXPECT_EQ(&info2_, ref_copy->get_host_info());
+  }
+
+  own<Store*> store_;
+
+  // Use statics so the values can be checked by the captureless lambdas above.
+  static int finalizer_count_;
+  static int info1_;
+  static Dummy info2_;
+};
+
+// static
+int WasmApiRefTest::finalizer_count_;
+// static
+int WasmApiRefTest::info1_;
+//static
+Dummy WasmApiRefTest::info2_;
+
+}  // end of anonymous namespace.
+
+TEST_F(WasmApiRefTest, Trap) {
+  const char str[] = "Hello, World!";
+  auto trap = Trap::make(store_.get(), Message::make(std::string(str)));
+  EXPECT_STREQ(str, trap->message().get());
+
+  TestRef(trap.get());
+}
+
+TEST_F(WasmApiRefTest, Foreign) {
+  auto foreign = Foreign::make(store_.get());
+  TestRef(foreign.get());
+}
