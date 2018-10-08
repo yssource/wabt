@@ -21,6 +21,94 @@
 
 using namespace wasm;
 
+// Included so we can use EXPECT_EQ with wasm types.
+namespace wasm {
+
+template <typename T>
+struct vec_element_eq {
+  bool operator()(const T& lhs, const T& rhs) const {
+    return lhs == rhs;
+  }
+};
+
+template <typename T>
+struct vec_element_eq<T*> {
+  bool operator()(const T* lhs, const T* rhs) const {
+    return *lhs == *rhs;
+  }
+};
+
+template <typename T>
+bool operator==(const vec<T>& lhs, const vec<T>& rhs) {
+  if (lhs.size() != rhs.size()) {
+    return false;
+  }
+
+  vec_element_eq<T> is_equal;
+  for (size_t i = 0; i < lhs.size(); ++i) {
+    if (!is_equal(lhs[i], rhs[i])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool operator==(const Limits& lhs, const Limits& rhs) {
+  return lhs.min == rhs.min && lhs.max == rhs.max;
+}
+
+bool operator==(const ValType& lhs, const ValType& rhs) {
+  return lhs.kind() == rhs.kind();
+}
+
+bool operator==(const FuncType& lhs, const FuncType& rhs) {
+  return lhs.params() == rhs.params() && lhs.results() == rhs.results();
+}
+
+bool operator==(const GlobalType& lhs, const GlobalType& rhs) {
+  return *lhs.content() == *rhs.content() &&
+         lhs.mutability() == rhs.mutability();
+}
+
+bool operator==(const TableType& lhs, const TableType& rhs) {
+  return *lhs.element() == *rhs.element() &&
+         lhs.limits() == rhs.limits();
+}
+
+bool operator==(const MemoryType& lhs, const MemoryType& rhs) {
+  return lhs.limits() == rhs.limits();
+}
+
+
+bool operator==(const ExternType& lhs, const ExternType& rhs) {
+  if (lhs.kind() != rhs.kind()) {
+    return false;
+  }
+
+  switch (lhs.kind()) {
+    case EXTERN_FUNC:
+      return *lhs.func() == *rhs.func();
+    case EXTERN_GLOBAL:
+      return *lhs.global() == *rhs.global();
+    case EXTERN_TABLE:
+      return *lhs.table() == *rhs.table();
+    case EXTERN_MEMORY:
+      return *lhs.memory() == *rhs.memory();
+  }
+}
+
+bool operator==(const ImportType& lhs, const ImportType& rhs) {
+  return lhs.module() == rhs.module() && lhs.name() == rhs.name() &&
+         *lhs.type() == *rhs.type();
+}
+
+bool operator==(const ExportType& lhs, const ExportType& rhs) {
+  return lhs.name() == rhs.name() && *lhs.type() == *rhs.type();
+}
+
+} // namespace wasm
+
 TEST(WasmApi, Store) {
   auto config = Config::make();
   auto engine = Engine::make(std::move(config));
@@ -86,7 +174,7 @@ TEST(WasmApi, FuncType) {
     EXPECT_EQ(nullptr, cft->table());
     EXPECT_EQ(nullptr, cft->memory());
 
-    // TODO ExternType::copy.
+    EXPECT_EQ(*ft, *ft->copy());
 
     // Test FuncType::params().
     {
@@ -154,6 +242,8 @@ TEST(WasmApi, GlobalType) {
     EXPECT_EQ(nullptr, cgt->table());
     EXPECT_EQ(nullptr, cgt->memory());
 
+    EXPECT_EQ(*gt, *gt->copy());
+
     // Test GlobalType::*.
     EXPECT_EQ(kind, gt->content()->kind());
     EXPECT_EQ(mut, gt->mutability());
@@ -181,6 +271,8 @@ TEST(WasmApi, TableType) {
     EXPECT_EQ(nullptr, ctt->global());
     EXPECT_EQ(ctt.get(), ctt->table());
     EXPECT_EQ(nullptr, ctt->memory());
+
+    EXPECT_EQ(*tt, *tt->copy());
 
     // Test TableType::*.
     EXPECT_EQ(element_kind, tt->element()->kind());
@@ -211,6 +303,8 @@ TEST(WasmApi, MemoryType) {
     EXPECT_EQ(nullptr, cmt->table());
     EXPECT_EQ(cmt.get(), cmt->memory());
 
+    EXPECT_EQ(*mt, *mt->copy());
+
     // Test MemoryType::*.
     EXPECT_EQ(limits.min, mt->limits().min);
     EXPECT_EQ(limits.max, mt->limits().max);
@@ -222,7 +316,7 @@ TEST(WasmApi, MemoryType) {
 }
 
 Name MakeName(const char* name) {
-  // TODO Name::make(std::string) will append an additional \0
+  // TODO Name::make(std::string) will append an additional \0.
   return Name::make(std::string(name));
 }
 
@@ -232,9 +326,12 @@ TEST(WasmApi, ImportType) {
 
     EXPECT_STREQ(module, it->module().get());
     EXPECT_STREQ(name, it->name().get());
+    EXPECT_EQ(type, *it->type());
+
+    EXPECT_EQ(*it, *it->copy());
   };
 
-  auto ft = FuncType::make(MakeVecValType({}), MakeVecValType({}));
+  auto ft = FuncType::make(MakeVecValType({I32}), MakeVecValType({F32}));
   auto gt = GlobalType::make(ValType::make(I32), CONST);
   auto tt = TableType::make(ValType::make(ANYREF), Limits(3, 5));
   auto mt = MemoryType::make(Limits(0, 4));
@@ -243,4 +340,26 @@ TEST(WasmApi, ImportType) {
   test("mod", "global", *gt);
   test("mod", "table", *tt);
   test("mod", "memory", *mt);
+}
+
+TEST(WasmApi, ExportType) {
+  auto test = [](const char* name, const ExternType& type) {
+    auto et = ExportType::make(MakeName(name), type.copy());
+
+    EXPECT_STREQ(name, et->name().get());
+    EXPECT_EQ(type.kind(), et->type()->kind());
+    EXPECT_EQ(type, *et->type());
+
+    EXPECT_EQ(*et, *et->copy());
+  };
+
+  auto ft = FuncType::make(MakeVecValType({F32}), MakeVecValType({I32}));
+  auto gt = GlobalType::make(ValType::make(I32), CONST);
+  auto tt = TableType::make(ValType::make(ANYREF), Limits(3, 5));
+  auto mt = MemoryType::make(Limits(0, 4));
+
+  test("func", *ft);
+  test("global", *gt);
+  test("table", *tt);
+  test("memory", *mt);
 }
