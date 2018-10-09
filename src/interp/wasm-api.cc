@@ -589,4 +589,80 @@ auto Foreign::copy() const -> own<Foreign*> {
   return impl(this)->copy();
 }
 
+////////////////////////////////////////////////////////////////////////////////
+
+struct ModuleObject : Object {
+  ModuleObject(vec<byte_t>&& binary) : binary(std::move(binary)) {}
+
+  vec<byte_t> binary;
+};
+
+using ModuleRefImpl = RefImpl<Module, ModuleObject>;
+
+template<> struct implement<Module> { using type = ModuleRefImpl; };
+
+Module::~Module() {}
+
+// static
+auto Module::validate(Store* store, const vec<byte_t>& binary) -> bool {
+  // TODO
+  return false;
+}
+
+// static
+auto Module::make(Store* store, const vec<byte_t>& binary) -> own<Module*> {
+  return make_own(
+      seal<Module>(new ModuleRefImpl(new ModuleObject(binary.copy()))));
+}
+
+auto Module::copy() const -> own<Module*> {
+  return impl(this)->copy();
+}
+
+auto Module::imports() const -> vec<ImportType*> {
+  // TODO
+  return vec<ImportType*>::make_uninitialized();
+}
+
+auto Module::exports() const -> vec<ExportType*> {
+  // TODO
+  return vec<ExportType*>::make_uninitialized();
+}
+
+auto Module::serialize() const -> vec<byte_t> {
+  // TODO
+  return vec<byte_t>::make_uninitialized();
+}
+
+// static
+auto Module::deserialize(Store* store, const vec<byte_t>& serialized)
+    -> own<Module*> {
+  // TODO
+  return make_own(
+      seal<Module>(new ModuleRefImpl(new ModuleObject(serialized.copy()))));
+}
+
+template<> struct implement<Shared<Module>> { using type = vec<byte_t>; };
+
+template<>
+Shared<Module>::~Shared() {
+  impl(this)->~vec();
+}
+
+template<>
+void Shared<Module>::operator delete(void* p) {
+  ::operator delete(p);
+}
+
+auto Module::share() const -> own<Shared<Module>*> {
+  auto shared = seal<Shared<Module>>(new vec<byte_t>(serialize()));
+  return make_own(shared);
+}
+
+// static
+auto Module::obtain(Store* store, const Shared<Module>* shared)
+    -> own<Module*> {
+  return Module::deserialize(store, *impl(shared));
+}
+
 }  // namespace wasm
