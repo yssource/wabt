@@ -18,6 +18,10 @@
 #include "include/wasm.hh"
 
 #include <cassert>
+#include <vector>
+
+#include "src/binary-reader.h"
+#include "src/binary-reader-nop.h"
 
 namespace wasm {
 
@@ -619,27 +623,286 @@ auto Module::copy() const -> own<Module*> {
   return impl(this)->copy();
 }
 
-auto Module::imports() const -> vec<ImportType*> {
-  // TODO
-  return vec<ImportType*>::make_uninitialized();
+own<ValType*> ToValType(wabt::Type type) {
+  switch (type) {
+    case wabt::Type::I32: return ValType::make(I32);
+    case wabt::Type::F32: return ValType::make(F32);
+    case wabt::Type::I64: return ValType::make(I64);
+    case wabt::Type::F64: return ValType::make(F64);
+    case wabt::Type::Anyfunc: return ValType::make(ANYREF);
+    default: return {};
+  }
 }
 
+vec<ValType*> ToValTypes(wabt::Index count, wabt::Type* types) {
+  auto result = vec<ValType*>::make_uninitialized(count);
+  for (wabt::Index i = 0; i < count; ++i) {
+    auto val_type = ToValType(types[i]);
+    if (!val_type) {
+      return vec<ValType*>::invalid();
+    }
+    result[i] = std::move(val_type);
+  }
+  return result;
+}
+
+Name ToName(wabt::string_view sv) {
+  auto name = Name::make_uninitialized(sv.size());
+  memcpy(name.get(), sv.data(), sv.size());
+  return name;
+}
+
+Limits ToLimits(const wabt::Limits& limits) {
+  return limits.has_max ? Limits(limits.initial, limits.max)
+                        : Limits(limits.initial);
+}
+
+Mutability ToMutability(bool mutable_) {
+  return mutable_ ? VAR : CONST;
+}
+
+struct BinaryReaderImportType : wabt::BinaryReaderNop {
+  bool OnError(const wabt::Error&) override { return true; }
+
+  wabt::Result OnType(wabt::Index index,
+                      wabt::Index param_count,
+                      wabt::Type* param_types,
+                      wabt::Index result_count,
+                      wabt::Type* result_types) override {
+    auto params = ToValTypes(param_count, param_types);
+    auto results = ToValTypes(result_count, result_types);
+    if (!(params && results)) {
+      return wabt::Result::Error;
+    }
+
+    func_types.push_back(FuncType::make(std::move(params), std::move(results)));
+    return wabt::Result::Ok;
+  }
+
+  wabt::Result OnImportFunc(wabt::Index import_index,
+                            wabt::string_view module_name,
+                            wabt::string_view field_name,
+                            wabt::Index func_index,
+                            wabt::Index sig_index) override {
+    if (sig_index >= func_types.size()) {
+      return wabt::Result::Error;
+    }
+
+    imports.push_back(ImportType::make(ToName(module_name), ToName(field_name),
+                                       func_types[sig_index]->copy()));
+    return wabt::Result::Ok;
+  }
+
+  wabt::Result OnImportGlobal(wabt::Index import_index,
+                              wabt::string_view module_name,
+                              wabt::string_view field_name,
+                              wabt::Index global_index,
+                              wabt::Type type,
+                              bool mutable_) override {
+    imports.push_back(ImportType::make(
+        ToName(module_name), ToName(field_name),
+        GlobalType::make(ToValType(type), ToMutability(mutable_))));
+    return wabt::Result::Ok;
+  }
+
+  wabt::Result OnImportMemory(wabt::Index import_index,
+                              wabt::string_view module_name,
+                              wabt::string_view field_name,
+                              wabt::Index memory_index,
+                              const wabt::Limits* page_limits) override {
+    imports.push_back(
+        ImportType::make(ToName(module_name), ToName(field_name),
+                         MemoryType::make(ToLimits(*page_limits))));
+    return wabt::Result::Ok;
+  }
+
+  wabt::Result OnImportTable(wabt::Index import_index,
+                             wabt::string_view module_name,
+                             wabt::string_view field_name,
+                             wabt::Index table_index,
+                             wabt::Type elem_type,
+                             const wabt::Limits* elem_limits) override {
+    imports.push_back(ImportType::make(
+        ToName(module_name), ToName(field_name),
+        TableType::make(ToValType(elem_type), ToLimits(*elem_limits))));
+    return wabt::Result::Ok;
+  }
+
+  std::vector<own<FuncType*>> func_types;
+  std::vector<own<ImportType*>> imports;
+};
+
+auto Module::imports() const -> vec<ImportType*> {
+  BinaryReaderImportType reader;
+  wabt::ReadBinaryOptions options;
+  const auto& binary = impl(this)->obj->binary;
+  if (wabt::Failed(
+          wabt::ReadBinary(binary.get(), binary.size(), &reader, options))) {
+    return vec<ImportType*>::invalid();
+  }
+
+  return vec<ImportType*>::make(reader.imports.size(), reader.imports.data());
+}
+
+struct BinaryReaderExportType : wabt::BinaryReaderNop {
+  bool OnError(const wabt::Error&) override { return true; }
+
+  wabt::Result OnType(wabt::Index index,
+                      wabt::Index param_count,
+                      wabt::Type* param_types,
+                      wabt::Index result_count,
+                      wabt::Type* result_types) override {
+    auto params = ToValTypes(param_count, param_types);
+    auto results = ToValTypes(result_count, result_types);
+    if (!(params && results)) {
+      return wabt::Result::Error;
+    }
+
+    func_types.push_back(FuncType::make(std::move(params), std::move(results)));
+    return wabt::Result::Ok;
+  }
+
+  wabt::Result OnImportFunc(wabt::Index import_index,
+                            wabt::string_view module_name,
+                            wabt::string_view field_name,
+                            wabt::Index func_index,
+                            wabt::Index sig_index) override {
+    functions.push_back({});
+    return wabt::Result::Ok;
+  }
+
+  wabt::Result OnImportGlobal(wabt::Index import_index,
+                              wabt::string_view module_name,
+                              wabt::string_view field_name,
+                              wabt::Index global_index,
+                              wabt::Type type,
+                              bool mutable_) override {
+    globals.push_back({});
+    return wabt::Result::Ok;
+  }
+
+  wabt::Result OnImportMemory(wabt::Index import_index,
+                              wabt::string_view module_name,
+                              wabt::string_view field_name,
+                              wabt::Index memory_index,
+                              const wabt::Limits* page_limits) override {
+    memories.push_back({});
+    return wabt::Result::Ok;
+  }
+
+  wabt::Result OnImportTable(wabt::Index import_index,
+                             wabt::string_view module_name,
+                             wabt::string_view field_name,
+                             wabt::Index table_index,
+                             wabt::Type elem_type,
+                             const wabt::Limits* elem_limits) override {
+    tables.push_back({});
+    return wabt::Result::Ok;
+  }
+
+  wabt::Result OnFunction(wabt::Index index, wabt::Index sig_index) override {
+    if (sig_index >= func_types.size()) {
+      return wabt::Result::Error;
+    }
+
+    functions.push_back(func_types[sig_index]->copy());
+    return wabt::Result::Ok;
+  }
+
+  wabt::Result BeginGlobal(wabt::Index index,
+                           wabt::Type type,
+                           bool mutable_) override {
+    globals.push_back(
+        GlobalType::make(ToValType(type), ToMutability(mutable_)));
+    return wabt::Result::Ok;
+  }
+
+  wabt::Result OnMemory(wabt::Index index,
+                        const wabt::Limits* limits) override {
+    memories.push_back(MemoryType::make(ToLimits(*limits)));
+    return wabt::Result::Ok;
+  }
+
+  wabt::Result OnTable(wabt::Index index,
+                       wabt::Type elem_type,
+                       const wabt::Limits* elem_limits) override {
+    tables.push_back(
+        TableType::make(ToValType(elem_type), ToLimits(*elem_limits)));
+    return wabt::Result::Ok;
+  }
+
+  wabt::Result OnExport(wabt::Index index,
+                        wabt::ExternalKind kind,
+                        wabt::Index item_index,
+                        wabt::string_view name) override {
+    own<ExternType*> extern_type;
+    switch (kind) {
+      case wabt::ExternalKind::Func:
+        if (item_index >= functions.size()) {
+          return wabt::Result::Error;
+        }
+        extern_type = functions[item_index]->copy();
+        break;
+
+      case wabt::ExternalKind::Global:
+        if (item_index >= globals.size()) {
+          return wabt::Result::Error;
+        }
+        extern_type = globals[item_index]->copy();
+        break;
+
+      case wabt::ExternalKind::Memory:
+        if (item_index >= memories.size()) {
+          return wabt::Result::Error;
+        }
+        extern_type = memories[item_index]->copy();
+        break;
+
+      case wabt::ExternalKind::Table:
+        if (item_index >= tables.size()) {
+          return wabt::Result::Error;
+        }
+        extern_type = tables[item_index]->copy();
+        break;
+
+      default:
+        return wabt::Result::Error;
+    }
+
+    exports.push_back(ExportType::make(ToName(name), std::move(extern_type)));
+    return wabt::Result::Ok;
+  }
+
+  std::vector<own<FuncType*>> func_types;
+  std::vector<own<FuncType*>> functions;
+  std::vector<own<GlobalType*>> globals;
+  std::vector<own<MemoryType*>> memories;
+  std::vector<own<TableType*>> tables;
+  std::vector<own<ExportType*>> exports;
+};
+
 auto Module::exports() const -> vec<ExportType*> {
-  // TODO
-  return vec<ExportType*>::make_uninitialized();
+  BinaryReaderExportType reader;
+  wabt::ReadBinaryOptions options;
+  const auto& binary = impl(this)->obj->binary;
+  if (wabt::Failed(
+          wabt::ReadBinary(binary.get(), binary.size(), &reader, options))) {
+    return vec<ExportType*>::invalid();
+  }
+
+  return vec<ExportType*>::make(reader.exports.size(), reader.exports.data());
 }
 
 auto Module::serialize() const -> vec<byte_t> {
-  // TODO
-  return vec<byte_t>::make_uninitialized();
+  // For now, just return the module bytes.
+  return impl(this)->obj->binary.copy();
 }
 
 // static
 auto Module::deserialize(Store* store, const vec<byte_t>& serialized)
     -> own<Module*> {
-  // TODO
-  return make_own(
-      seal<Module>(new ModuleRefImpl(new ModuleObject(serialized.copy()))));
+  // For now, just use the serialized bytes directly.
+  return make(store, serialized);
 }
 
 template<> struct implement<Shared<Module>> { using type = vec<byte_t>; };

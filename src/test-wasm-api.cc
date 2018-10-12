@@ -19,6 +19,8 @@
 #include "include/wasm.h"
 #include "include/wasm.hh"
 
+#include "src/common.h"
+
 using namespace wasm;
 
 // Included so we can use EXPECT_EQ with wasm types.
@@ -315,17 +317,27 @@ TEST(WasmApi, MemoryType) {
   }
 }
 
-Name MakeName(const char* name) {
-  // TODO Name::make(std::string) will append an additional \0.
-  return Name::make(std::string(name));
+Name MakeName(const char* cstr) {
+  size_t len = strlen(cstr);
+  auto name = Name::make_uninitialized(len);
+  memcpy(name.get(), cstr, len);
+  return name;
+}
+
+bool NameEquals(const Name& name, const char* cstr) {
+  size_t len = strlen(cstr);
+  if (len != name.size()) {
+    return false;
+  }
+  return strncmp(name.get(), cstr, len) == 0;
 }
 
 TEST(WasmApi, ImportType) {
   auto test = [](const char* module, const char* name, const ExternType& type) {
     auto it = ImportType::make(MakeName(module), MakeName(name), type.copy());
 
-    EXPECT_STREQ(module, it->module().get());
-    EXPECT_STREQ(name, it->name().get());
+    EXPECT_TRUE(NameEquals(it->module(), module));
+    EXPECT_TRUE(NameEquals(it->name(), name));
     EXPECT_EQ(type, *it->type());
 
     EXPECT_EQ(*it, *it->copy());
@@ -346,7 +358,7 @@ TEST(WasmApi, ExportType) {
   auto test = [](const char* name, const ExternType& type) {
     auto et = ExportType::make(MakeName(name), type.copy());
 
-    EXPECT_STREQ(name, et->name().get());
+    EXPECT_TRUE(NameEquals(et->name(), name));
     EXPECT_EQ(type.kind(), et->type()->kind());
     EXPECT_EQ(type, *et->type());
 
@@ -444,4 +456,142 @@ TEST_F(WasmApiRefTest, Trap) {
 TEST_F(WasmApiRefTest, Foreign) {
   auto foreign = Foreign::make(store_.get());
   TestRef(foreign.get());
+}
+
+TEST(WasmApi, ModuleImports) {
+  // (import "m0" "f0" (func))
+  // (import "m0" "f1" (func (param i32 f32 i64 f64) (result i32)))
+  // (import "m0" "g0" (global i32))
+  // (import "m1" "g1" (global (mut f32)))
+  // (import "m1" "m" (memory 1))
+  // (import "m1" "t" (table 2 anyfunc))
+  byte_t data[] = {
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0c, 0x02,
+      0x60, 0x00, 0x00, 0x60, 0x04, 0x7f, 0x7d, 0x7e, 0x7c, 0x01, 0x7f,
+      0x02, 0x34, 0x06, 0x02, 0x6d, 0x30, 0x02, 0x66, 0x30, 0x00, 0x00,
+      0x02, 0x6d, 0x30, 0x02, 0x66, 0x31, 0x00, 0x01, 0x02, 0x6d, 0x30,
+      0x02, 0x67, 0x30, 0x03, 0x7f, 0x00, 0x02, 0x6d, 0x31, 0x02, 0x67,
+      0x31, 0x03, 0x7d, 0x01, 0x02, 0x6d, 0x31, 0x01, 0x6d, 0x02, 0x00,
+      0x01, 0x02, 0x6d, 0x31, 0x01, 0x74, 0x01, 0x70, 0x00, 0x02,
+  };
+  auto binary = vec<byte_t>::make(sizeof(data), data);
+  auto config = Config::make();
+  auto engine = Engine::make(std::move(config));
+  auto store = Store::make(engine.get());
+  auto module = Module::make(store.get(), binary);
+  auto imports = module->imports();
+
+  auto ft0 = FuncType::make(MakeVecValType({}), MakeVecValType({}));
+  auto ft1 = FuncType::make(MakeVecValType({I32, F32, I64, F64}),
+                            MakeVecValType({I32}));
+  auto gt0 = GlobalType::make(ValType::make(I32), CONST);
+  auto gt1 = GlobalType::make(ValType::make(F32), VAR);
+  auto mt = MemoryType::make(Limits(1));
+  auto tt = TableType::make(ValType::make(ANYREF), Limits(2));
+
+  ASSERT_EQ(6u, imports.size());
+  EXPECT_EQ(*ImportType::make(MakeName("m0"), MakeName("f0"), std::move(ft0)),
+            *imports[0]);
+  EXPECT_EQ(*ImportType::make(MakeName("m0"), MakeName("f1"), std::move(ft1)),
+            *imports[1]);
+  EXPECT_EQ(*ImportType::make(MakeName("m0"), MakeName("g0"), std::move(gt0)),
+            *imports[2]);
+  EXPECT_EQ(*ImportType::make(MakeName("m1"), MakeName("g1"), std::move(gt1)),
+            *imports[3]);
+  EXPECT_EQ(*ImportType::make(MakeName("m1"), MakeName("m"), std::move(mt)),
+            *imports[4]);
+  EXPECT_EQ(*ImportType::make(MakeName("m1"), MakeName("t"), std::move(tt)),
+            *imports[5]);
+}
+
+TEST(WasmApi, ModuleImportsError) {
+  // If the module can't be parsed, don't return any imports.
+  byte_t data[] = {
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,  // magic + version
+
+      0x02, 0x08,  // Import section, 8 bytes
+      0x01,        // 1 import
+      0x01, 0x6d,  // Module: "m"
+      0x01, 0x67,  // Name: "g"
+      0x03,        // Import kind: global
+      0x7f, 0x00,  // Global type: i32, not mutable
+
+      0x7f  // Invalid section id
+  };
+  auto binary = vec<byte_t>::make(sizeof(data), data);
+  auto config = Config::make();
+  auto engine = Engine::make(std::move(config));
+  auto store = Store::make(engine.get());
+  auto module = Module::make(store.get(), binary);
+  auto imports = module->imports();
+
+  EXPECT_FALSE(imports);
+  EXPECT_EQ(nullptr, imports.get());
+}
+
+TEST(WasmApi, ModuleExports) {
+  // (func (export "f0"))
+  // (func (export "f1") (param i32 f32 i64 f64) (result i32) i32.const 0)
+  // (global (export "g0") i32 (i32.const 0))
+  // (global (export "g1") (mut f32) (f32.const 0))
+  // (memory (export "m") 1)
+  // (table (export "t") 2 anyfunc)
+  byte_t data[] = {
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0c, 0x02, 0x60,
+      0x00, 0x00, 0x60, 0x04, 0x7f, 0x7d, 0x7e, 0x7c, 0x01, 0x7f, 0x03, 0x03,
+      0x02, 0x00, 0x01, 0x04, 0x04, 0x01, 0x70, 0x00, 0x02, 0x05, 0x03, 0x01,
+      0x00, 0x01, 0x06, 0x0e, 0x02, 0x7f, 0x00, 0x41, 0x00, 0x0b, 0x7d, 0x01,
+      0x43, 0x00, 0x00, 0x00, 0x00, 0x0b, 0x07, 0x1d, 0x06, 0x02, 0x66, 0x30,
+      0x00, 0x00, 0x02, 0x66, 0x31, 0x00, 0x01, 0x02, 0x67, 0x30, 0x03, 0x00,
+      0x02, 0x67, 0x31, 0x03, 0x01, 0x01, 0x6d, 0x02, 0x00, 0x01, 0x74, 0x01,
+      0x00, 0x0a, 0x09, 0x02, 0x02, 0x00, 0x0b, 0x04, 0x00, 0x41, 0x00, 0x0b,
+  };
+  auto binary = vec<byte_t>::make(sizeof(data), data);
+  auto config = Config::make();
+  auto engine = Engine::make(std::move(config));
+  auto store = Store::make(engine.get());
+  auto module = Module::make(store.get(), binary);
+  auto exports = module->exports();
+
+  auto ft0 = FuncType::make(MakeVecValType({}), MakeVecValType({}));
+  auto ft1 = FuncType::make(MakeVecValType({I32, F32, I64, F64}),
+                            MakeVecValType({I32}));
+  auto gt0 = GlobalType::make(ValType::make(I32), CONST);
+  auto gt1 = GlobalType::make(ValType::make(F32), VAR);
+  auto mt = MemoryType::make(Limits(1));
+  auto tt = TableType::make(ValType::make(ANYREF), Limits(2));
+
+  ASSERT_EQ(6u, exports.size());
+  EXPECT_EQ(*ExportType::make(MakeName("f0"), std::move(ft0)), *exports[0]);
+  EXPECT_EQ(*ExportType::make(MakeName("f1"), std::move(ft1)), *exports[1]);
+  EXPECT_EQ(*ExportType::make(MakeName("g0"), std::move(gt0)), *exports[2]);
+  EXPECT_EQ(*ExportType::make(MakeName("g1"), std::move(gt1)), *exports[3]);
+  EXPECT_EQ(*ExportType::make(MakeName("m"), std::move(mt)), *exports[4]);
+  EXPECT_EQ(*ExportType::make(MakeName("t"), std::move(tt)), *exports[5]);
+}
+
+TEST(WasmApi, ModuleExportsError) {
+  // If the module can't be parsed, don't return any exports.
+  byte_t data[] = {
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,  // magic + version
+
+      0x05, 0x03,  // Memory section, 3 bytes
+      0x01,        // 1 memory
+      0x00, 0x01,  // Initial size 0, no maximum
+      0x07, 0x05,  // Export section, 5 bytes
+      0x01,        // 1 export
+      0x01, 0x6d,  // Name: "m"
+      0x02, 0x00,  // kind: global, index: 0
+
+      0x7f  // Invalid section id
+  };
+  auto binary = vec<byte_t>::make(sizeof(data), data);
+  auto config = Config::make();
+  auto engine = Engine::make(std::move(config));
+  auto store = Store::make(engine.get());
+  auto module = Module::make(store.get(), binary);
+  auto exports = module->exports();
+
+  EXPECT_FALSE(exports);
+  EXPECT_EQ(nullptr, exports.get());
 }
