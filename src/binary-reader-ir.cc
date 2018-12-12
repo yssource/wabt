@@ -32,17 +32,6 @@ namespace wabt {
 
 namespace {
 
-struct LabelNode {
-  LabelNode(LabelType, ExprList* exprs, Expr* context = nullptr);
-
-  LabelType label_type;
-  ExprList* exprs;
-  Expr* context;
-};
-
-LabelNode::LabelNode(LabelType label_type, ExprList* exprs, Expr* context)
-    : label_type(label_type), exprs(exprs), context(context) {}
-
 class BinaryReaderIR : public BinaryReaderNop {
  public:
   BinaryReaderIR(Module* out_module,
@@ -230,13 +219,6 @@ class BinaryReaderIR : public BinaryReaderNop {
  private:
   Location GetLocation() const;
   void PrintError(const char* format, ...);
-  void PushLabel(LabelType label_type,
-                 ExprList* first,
-                 Expr* context = nullptr);
-  Result PopLabel();
-  Result GetLabelAt(LabelNode** label, Index depth);
-  Result TopLabel(LabelNode** label);
-  Result TopLabelExpr(LabelNode** label, Expr** expr);
   Result AppendExpr(std::unique_ptr<Expr> expr);
   void SetBlockDeclaration(BlockDeclaration* decl, Type sig_type);
 
@@ -247,7 +229,6 @@ class BinaryReaderIR : public BinaryReaderNop {
   Module* module_ = nullptr;
 
   Func* current_func_ = nullptr;
-  std::vector<LabelNode> label_stack_;
   ExprList* current_init_expr_ = nullptr;
   const char* filename_;
 };
@@ -270,50 +251,9 @@ void WABT_PRINTF_FORMAT(2, 3) BinaryReaderIR::PrintError(const char* format,
   errors_->emplace_back(ErrorLevel::Error, Location(kInvalidOffset), buffer);
 }
 
-void BinaryReaderIR::PushLabel(LabelType label_type,
-                               ExprList* first,
-                               Expr* context) {
-  label_stack_.emplace_back(label_type, first, context);
-}
-
-Result BinaryReaderIR::PopLabel() {
-  if (label_stack_.size() == 0) {
-    PrintError("popping empty label stack");
-    return Result::Error;
-  }
-
-  label_stack_.pop_back();
-  return Result::Ok;
-}
-
-Result BinaryReaderIR::GetLabelAt(LabelNode** label, Index depth) {
-  if (depth >= label_stack_.size()) {
-    PrintError("accessing stack depth: %" PRIindex " >= max: %" PRIzd, depth,
-               label_stack_.size());
-    return Result::Error;
-  }
-
-  *label = &label_stack_[label_stack_.size() - depth - 1];
-  return Result::Ok;
-}
-
-Result BinaryReaderIR::TopLabel(LabelNode** label) {
-  return GetLabelAt(label, 0);
-}
-
-Result BinaryReaderIR::TopLabelExpr(LabelNode** label, Expr** expr) {
-  CHECK_RESULT(TopLabel(label));
-  LabelNode* parent_label;
-  CHECK_RESULT(GetLabelAt(&parent_label, 1));
-  *expr = &parent_label->exprs->back();
-  return Result::Ok;
-}
-
 Result BinaryReaderIR::AppendExpr(std::unique_ptr<Expr> expr) {
   expr->loc = GetLocation();
-  LabelNode* label;
-  CHECK_RESULT(TopLabel(&label));
-  label->exprs->push_back(std::move(expr));
+  current_func_->exprs.push_back(std::move(expr));
   return Result::Ok;
 }
 
@@ -576,7 +516,6 @@ Result BinaryReaderIR::OnFunctionBodyCount(Index count) {
 
 Result BinaryReaderIR::BeginFunctionBody(Index index) {
   current_func_ = module_->funcs[index];
-  PushLabel(LabelType::Func, &current_func_->exprs);
   return Result::Ok;
 }
 
@@ -634,9 +573,7 @@ Result BinaryReaderIR::OnBinaryExpr(Opcode opcode) {
 Result BinaryReaderIR::OnBlockExpr(Type sig_type) {
   auto expr = MakeUnique<BlockExpr>();
   SetBlockDeclaration(&expr->block.decl, sig_type);
-  ExprList* expr_list = &expr->block.exprs;
   CHECK_RESULT(AppendExpr(std::move(expr)));
-  PushLabel(LabelType::Block, expr_list);
   return Result::Ok;
 }
 
@@ -701,61 +638,11 @@ Result BinaryReaderIR::OnDropExpr() {
 }
 
 Result BinaryReaderIR::OnElseExpr() {
-  LabelNode* label;
-  Expr* expr;
-  CHECK_RESULT(TopLabelExpr(&label, &expr));
-
-  if (label->label_type == LabelType::If) {
-    auto* if_expr = cast<IfExpr>(expr);
-    if_expr->true_.end_loc = GetLocation();
-    label->exprs = &if_expr->false_;
-    label->label_type = LabelType::Else;
-  } else if (label->label_type == LabelType::IfExcept) {
-    auto* if_except_expr = cast<IfExceptExpr>(expr);
-    if_except_expr->true_.end_loc = GetLocation();
-    label->exprs = &if_except_expr->false_;
-    label->label_type = LabelType::IfExceptElse;
-  } else {
-    PrintError("else expression without matching if");
-    return Result::Error;
-  }
-
-  return Result::Ok;
+  return AppendExpr(MakeUnique<ElseExpr>());
 }
 
 Result BinaryReaderIR::OnEndExpr() {
-  LabelNode* label;
-  Expr* expr;
-  CHECK_RESULT(TopLabelExpr(&label, &expr));
-  switch (label->label_type) {
-    case LabelType::Block:
-      cast<BlockExpr>(expr)->block.end_loc = GetLocation();
-      break;
-    case LabelType::Loop:
-      cast<LoopExpr>(expr)->block.end_loc = GetLocation();
-      break;
-    case LabelType::If:
-      cast<IfExpr>(expr)->true_.end_loc = GetLocation();
-      break;
-    case LabelType::Else:
-      cast<IfExpr>(expr)->false_end_loc = GetLocation();
-      break;
-    case LabelType::IfExcept:
-      cast<IfExceptExpr>(expr)->true_.end_loc = GetLocation();
-      break;
-    case LabelType::IfExceptElse:
-      cast<IfExceptExpr>(expr)->false_end_loc = GetLocation();
-      break;
-    case LabelType::Try:
-      cast<TryExpr>(expr)->block.end_loc = GetLocation();
-      break;
-
-    case LabelType::Func:
-    case LabelType::Catch:
-      break;
-  }
-
-  return PopLabel();
+  return AppendExpr(MakeUnique<EndExpr>());
 }
 
 Result BinaryReaderIR::OnF32ConstExpr(uint32_t value_bits) {
@@ -792,21 +679,15 @@ Result BinaryReaderIR::OnI64ConstExpr(uint64_t value) {
 
 Result BinaryReaderIR::OnIfExpr(Type sig_type) {
   auto expr = MakeUnique<IfExpr>();
-  SetBlockDeclaration(&expr->true_.decl, sig_type);
-  ExprList* expr_list = &expr->true_.exprs;
-  CHECK_RESULT(AppendExpr(std::move(expr)));
-  PushLabel(LabelType::If, expr_list);
-  return Result::Ok;
+  SetBlockDeclaration(&expr->block.decl, sig_type);
+  return AppendExpr(std::move(expr));
 }
 
 Result BinaryReaderIR::OnIfExceptExpr(Type sig_type, Index except_index) {
   auto expr = MakeUnique<IfExceptExpr>();
   expr->except_var = Var(except_index, GetLocation());
-  SetBlockDeclaration(&expr->true_.decl, sig_type);
-  ExprList* expr_list = &expr->true_.exprs;
-  CHECK_RESULT(AppendExpr(std::move(expr)));
-  PushLabel(LabelType::IfExcept, expr_list);
-  return Result::Ok;
+  SetBlockDeclaration(&expr->block.decl, sig_type);
+  return AppendExpr(std::move(expr));
 }
 
 Result BinaryReaderIR::OnLoadExpr(Opcode opcode,
@@ -818,10 +699,7 @@ Result BinaryReaderIR::OnLoadExpr(Opcode opcode,
 Result BinaryReaderIR::OnLoopExpr(Type sig_type) {
   auto expr = MakeUnique<LoopExpr>();
   SetBlockDeclaration(&expr->block.decl, sig_type);
-  ExprList* expr_list = &expr->block.exprs;
-  CHECK_RESULT(AppendExpr(std::move(expr)));
-  PushLabel(LabelType::Loop, expr_list);
-  return Result::Ok;
+  return AppendExpr(std::move(expr));
 }
 
 Result BinaryReaderIR::OnMemoryCopyExpr() {
@@ -900,30 +778,13 @@ Result BinaryReaderIR::OnTeeLocalExpr(Index local_index) {
 }
 
 Result BinaryReaderIR::OnTryExpr(Type sig_type) {
-  auto expr_ptr = MakeUnique<TryExpr>();
-  // Save expr so it can be used below, after expr_ptr has been moved.
-  TryExpr* expr = expr_ptr.get();
-  ExprList* expr_list = &expr->block.exprs;
+  auto expr = MakeUnique<TryExpr>();
   SetBlockDeclaration(&expr->block.decl, sig_type);
-  CHECK_RESULT(AppendExpr(std::move(expr_ptr)));
-  PushLabel(LabelType::Try, expr_list, expr);
-  return Result::Ok;
+  return AppendExpr(std::move(expr));
 }
 
 Result BinaryReaderIR::OnCatchExpr() {
-  LabelNode* label;
-  CHECK_RESULT(TopLabel(&label));
-  if (label->label_type != LabelType::Try) {
-    PrintError("catch expression without matching try");
-    return Result::Error;
-  }
-
-  LabelNode* parent_label;
-  CHECK_RESULT(GetLabelAt(&parent_label, 1));
-
-  label->label_type = LabelType::Catch;
-  label->exprs = &cast<TryExpr>(&parent_label->exprs->back())->catch_;
-  return Result::Ok;
+  return AppendExpr(MakeUnique<CatchExpr>());
 }
 
 Result BinaryReaderIR::OnUnaryExpr(Opcode opcode) {
@@ -939,7 +800,6 @@ Result BinaryReaderIR::OnUnreachableExpr() {
 }
 
 Result BinaryReaderIR::EndFunctionBody(Index index) {
-  CHECK_RESULT(PopLabel());
   current_func_ = nullptr;
   return Result::Ok;
 }

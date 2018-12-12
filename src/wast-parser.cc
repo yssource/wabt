@@ -274,27 +274,27 @@ class ResolveFuncTypesExprVisitorDelegate : public ExprVisitor::DelegateNop {
     }
   }
 
-  Result BeginBlockExpr(BlockExpr* expr) override {
+  Result OnBlockExpr(BlockExpr* expr) override {
     ResolveBlockDeclaration(expr->loc, &expr->block.decl);
     return Result::Ok;
   }
 
-  Result BeginIfExpr(IfExpr* expr) override {
-    ResolveBlockDeclaration(expr->loc, &expr->true_.decl);
-    return Result::Ok;
-  }
-
-  Result BeginIfExceptExpr(IfExceptExpr* expr) override {
-    ResolveBlockDeclaration(expr->loc, &expr->true_.decl);
-    return Result::Ok;
-  }
-
-  Result BeginLoopExpr(LoopExpr* expr) override {
+  Result OnIfExpr(IfExpr* expr) override {
     ResolveBlockDeclaration(expr->loc, &expr->block.decl);
     return Result::Ok;
   }
 
-  Result BeginTryExpr(TryExpr* expr) override {
+  Result OnIfExceptExpr(IfExceptExpr* expr) override {
+    ResolveBlockDeclaration(expr->loc, &expr->block.decl);
+    return Result::Ok;
+  }
+
+  Result OnLoopExpr(LoopExpr* expr) override {
+    ResolveBlockDeclaration(expr->loc, &expr->block.decl);
+    return Result::Ok;
+  }
+
+  Result OnTryExpr(TryExpr* expr) override {
     ResolveBlockDeclaration(expr->loc, &expr->block.decl);
     return Result::Ok;
   }
@@ -1299,10 +1299,7 @@ Result WastParser::ParseInstr(ExprList* exprs) {
     exprs->push_back(std::move(expr));
     return Result::Ok;
   } else if (IsBlockInstr(Peek())) {
-    std::unique_ptr<Expr> expr;
-    CHECK_RESULT(ParseBlockInstr(&expr));
-    exprs->push_back(std::move(expr));
-    return Result::Ok;
+    return ParseBlockInstr(exprs);
   } else if (PeekMatchExpr()) {
     return ParseExpr(exprs);
   } else {
@@ -1758,77 +1755,67 @@ Result WastParser::ParseConstList(ConstVector* consts) {
   return Result::Ok;
 }
 
-Result WastParser::ParseBlockInstr(std::unique_ptr<Expr>* out_expr) {
+Result WastParser::ParseBlockInstr(ExprList* exprs) {
   WABT_TRACE(ParseBlockInstr);
   Location loc = GetLocation();
 
   switch (Peek()) {
     case TokenType::Block: {
       Consume();
-      auto expr = MakeUnique<BlockExpr>(loc);
-      CHECK_RESULT(ParseLabelOpt(&expr->block.label));
-      CHECK_RESULT(ParseBlock(&expr->block));
-      EXPECT(End);
-      CHECK_RESULT(ParseEndLabelOpt(expr->block.label));
-      *out_expr = std::move(expr);
+      std::string label;
+      CHECK_RESULT(ParseBlock<BlockExpr>(loc, exprs, &label));
+      CHECK_RESULT(ParseInstrList(exprs));
+      CHECK_RESULT(ParseEnd(exprs, label));
       break;
     }
 
     case TokenType::Loop: {
       Consume();
-      auto expr = MakeUnique<LoopExpr>(loc);
-      CHECK_RESULT(ParseLabelOpt(&expr->block.label));
-      CHECK_RESULT(ParseBlock(&expr->block));
-      EXPECT(End);
-      CHECK_RESULT(ParseEndLabelOpt(expr->block.label));
-      *out_expr = std::move(expr);
+      std::string label;
+      CHECK_RESULT(ParseBlock<LoopExpr>(loc, exprs, &label));
+      CHECK_RESULT(ParseInstrList(exprs));
+      CHECK_RESULT(ParseEnd(exprs, label));
       break;
     }
 
     case TokenType::If: {
       Consume();
-      auto expr = MakeUnique<IfExpr>(loc);
-      CHECK_RESULT(ParseLabelOpt(&expr->true_.label));
-      CHECK_RESULT(ParseBlock(&expr->true_));
+      std::string label;
+      CHECK_RESULT(ParseBlock<IfExpr>(loc, exprs, &label));
+      CHECK_RESULT(ParseInstrList(exprs));
       if (Match(TokenType::Else)) {
-        CHECK_RESULT(ParseEndLabelOpt(expr->true_.label));
-        CHECK_RESULT(ParseTerminatingInstrList(&expr->false_));
-        expr->false_end_loc = GetLocation();
+        CHECK_RESULT(ParseEndLabelOpt(label));
+        exprs->push_back(MakeUnique<ElseExpr>(GetLocation()));
+        CHECK_RESULT(ParseTerminatingInstrList(exprs));
       }
-      EXPECT(End);
-      CHECK_RESULT(ParseEndLabelOpt(expr->true_.label));
-      *out_expr = std::move(expr);
+      CHECK_RESULT(ParseEnd(exprs, label));
       break;
     }
 
     case TokenType::IfExcept: {
       ErrorUnlessOpcodeEnabled(Consume());
-      auto expr = MakeUnique<IfExceptExpr>(loc);
-      CHECK_RESULT(ParseIfExceptHeader(expr.get()));
-      CHECK_RESULT(ParseInstrList(&expr->true_.exprs));
-      expr->true_.end_loc = GetLocation();
+      std::string label;
+      CHECK_RESULT(ParseBlock<IfExceptExpr>(loc, exprs, &label));
+      CHECK_RESULT(ParseInstrList(exprs));
       if (Match(TokenType::Else)) {
-        CHECK_RESULT(ParseEndLabelOpt(expr->true_.label));
-        CHECK_RESULT(ParseTerminatingInstrList(&expr->false_));
-        expr->false_end_loc = GetLocation();
+        CHECK_RESULT(ParseEndLabelOpt(label));
+        exprs->push_back(MakeUnique<ElseExpr>(GetLocation()));
+        CHECK_RESULT(ParseTerminatingInstrList(exprs));
       }
-      EXPECT(End);
-      CHECK_RESULT(ParseEndLabelOpt(expr->true_.label));
-      *out_expr = std::move(expr);
+      CHECK_RESULT(ParseEnd(exprs, label));
       break;
     }
 
     case TokenType::Try: {
       ErrorUnlessOpcodeEnabled(Consume());
-      auto expr = MakeUnique<TryExpr>(loc);
-      CHECK_RESULT(ParseLabelOpt(&expr->block.label));
-      CHECK_RESULT(ParseBlock(&expr->block));
+      std::string label;
+      CHECK_RESULT(ParseBlock<TryExpr>(loc, exprs, &label));
+      CHECK_RESULT(ParseInstrList(exprs));
       EXPECT(Catch);
-      CHECK_RESULT(ParseEndLabelOpt(expr->block.label));
-      CHECK_RESULT(ParseTerminatingInstrList(&expr->catch_));
-      EXPECT(End);
-      CHECK_RESULT(ParseEndLabelOpt(expr->block.label));
-      *out_expr = std::move(expr);
+      CHECK_RESULT(ParseEndLabelOpt(label));
+      exprs->push_back(MakeUnique<CatchExpr>(GetLocation()));
+      CHECK_RESULT(ParseTerminatingInstrList(exprs));
+      CHECK_RESULT(ParseEnd(exprs, label));
       break;
     }
 
@@ -1848,6 +1835,13 @@ Result WastParser::ParseLabelOpt(std::string* out_label) {
   } else {
     out_label->clear();
   }
+  return Result::Ok;
+}
+
+Result WastParser::ParseEnd(ExprList* exprs, const std::string& begin_label) {
+  EXPECT(End);
+  CHECK_RESULT(ParseEndLabelOpt(begin_label));
+  exprs->push_back(MakeUnique<EndExpr>(GetLocation()));
   return Result::Ok;
 }
 
@@ -1878,15 +1872,15 @@ Result WastParser::ParseBlockDeclaration(BlockDeclaration* decl) {
   return Result::Ok;
 }
 
-Result WastParser::ParseBlock(Block* block) {
-  WABT_TRACE(ParseBlock);
-  CHECK_RESULT(ParseBlockDeclaration(&block->decl));
-  CHECK_RESULT(ParseInstrList(&block->exprs));
-  block->end_loc = GetLocation();
+template <typename T>
+Result WastParser::ParseBlockHeader(T* expr) {
+  CHECK_RESULT(ParseLabelOpt(&expr->block.label));
+  CHECK_RESULT(ParseBlockDeclaration(&expr->block.decl));
   return Result::Ok;
 }
 
-Result WastParser::ParseIfExceptHeader(IfExceptExpr* expr) {
+template <>
+Result WastParser::ParseBlockHeader<IfExceptExpr>(IfExceptExpr* expr) {
   WABT_TRACE(ParseIfExceptHeader);
   // if_except has the syntax:
   //
@@ -1913,7 +1907,7 @@ Result WastParser::ParseIfExceptHeader(IfExceptExpr* expr) {
 
   if (PeekMatchLpar(TokenType::Result) || PeekMatchLpar(TokenType::Param)) {
     // Cases 4, 6, 7.
-    CHECK_RESULT(ParseBlockDeclaration(&expr->true_.decl));
+    CHECK_RESULT(ParseBlockDeclaration(&expr->block.decl));
     CHECK_RESULT(ParseVar(&expr->except_var));
   } else if (PeekMatch(TokenType::Nat)) {
     // Case 1.
@@ -1924,12 +1918,12 @@ Result WastParser::ParseIfExceptHeader(IfExceptExpr* expr) {
     CHECK_RESULT(ParseVar(&var));
     if (PeekMatchLpar(TokenType::Result) || PeekMatchLpar(TokenType::Param)) {
       // Cases 5, 8, 9.
-      expr->true_.label = var.name();
-      CHECK_RESULT(ParseBlockDeclaration(&expr->true_.decl));
+      expr->block.label = var.name();
+      CHECK_RESULT(ParseBlockDeclaration(&expr->block.decl));
       CHECK_RESULT(ParseVar(&expr->except_var));
     } else if (ParseVarOpt(&expr->except_var, Var())) {
       // Case 3.
-      expr->true_.label = var.name();
+      expr->block.label = var.name();
     } else {
       // Case 2.
       expr->except_var = var;
@@ -1939,6 +1933,22 @@ Result WastParser::ParseIfExceptHeader(IfExceptExpr* expr) {
                          "12 or $foo or (result ...)");
   }
 
+  return Result::Ok;
+  return Result::Ok;
+}
+
+template <typename T>
+Result WastParser::ParseBlock(Location loc,
+                              ExprList* exprs,
+                              std::string* out_label) {
+  WABT_TRACE(ParseBlock);
+  auto expr = MakeUnique<T>(loc);
+  Block& block = expr->block;
+  CHECK_RESULT(ParseBlockHeader<T>(expr.get()));
+  exprs->push_back(std::move(expr));
+  if (out_label) {
+    *out_label = block.label;
+  }
   return Result::Ok;
 }
 
@@ -1972,125 +1982,46 @@ Result WastParser::ParseExpr(ExprList* exprs) {
     Location loc = GetLocation();
 
     switch (Peek(1)) {
-      case TokenType::Block: {
+      case TokenType::Block:
         Consume();
         Consume();
-        auto expr = MakeUnique<BlockExpr>(loc);
-        CHECK_RESULT(ParseLabelOpt(&expr->block.label));
-        CHECK_RESULT(ParseBlock(&expr->block));
-        exprs->push_back(std::move(expr));
+        CHECK_RESULT(ParseBlock<BlockExpr>(loc, exprs));
+        CHECK_RESULT(ParseInstrList(exprs));
+        exprs->push_back(MakeUnique<EndExpr>(GetLocation()));
         break;
-      }
 
       case TokenType::Loop: {
         Consume();
         Consume();
-        auto expr = MakeUnique<LoopExpr>(loc);
-        CHECK_RESULT(ParseLabelOpt(&expr->block.label));
-        CHECK_RESULT(ParseBlock(&expr->block));
-        exprs->push_back(std::move(expr));
+        CHECK_RESULT(ParseBlock<LoopExpr>(loc, exprs));
+        CHECK_RESULT(ParseInstrList(exprs));
+        exprs->push_back(MakeUnique<EndExpr>(GetLocation()));
         break;
       }
 
-      case TokenType::If: {
+      case TokenType::If:
         Consume();
         Consume();
-        auto expr = MakeUnique<IfExpr>(loc);
-
-        CHECK_RESULT(ParseLabelOpt(&expr->true_.label));
-        CHECK_RESULT(ParseBlockDeclaration(&expr->true_.decl));
-
-        if (PeekMatchExpr()) {
-          ExprList cond;
-          CHECK_RESULT(ParseExpr(&cond));
-          exprs->splice(exprs->end(), cond);
-        }
-
-        if (MatchLpar(TokenType::Then)) {
-          CHECK_RESULT(ParseTerminatingInstrList(&expr->true_.exprs));
-          expr->true_.end_loc = GetLocation();
-          EXPECT(Rpar);
-
-          if (MatchLpar(TokenType::Else)) {
-            CHECK_RESULT(ParseTerminatingInstrList(&expr->false_));
-            EXPECT(Rpar);
-          } else if (PeekMatchExpr()) {
-            CHECK_RESULT(ParseExpr(&expr->false_));
-          }
-          expr->false_end_loc = GetLocation();
-        } else if (PeekMatchExpr()) {
-          CHECK_RESULT(ParseExpr(&expr->true_.exprs));
-          expr->true_.end_loc = GetLocation();
-          if (PeekMatchExpr()) {
-            CHECK_RESULT(ParseExpr(&expr->false_));
-            expr->false_end_loc = GetLocation();
-          }
-        } else {
-          ConsumeIfLpar();
-          return ErrorExpected({"then block"}, "(then ...)");
-        }
-
-        exprs->push_back(std::move(expr));
+        CHECK_RESULT(ParseIfExpr<IfExpr>(loc, exprs));
         break;
-      }
 
-      case TokenType::IfExcept: {
+      case TokenType::IfExcept:
         Consume();
         ErrorUnlessOpcodeEnabled(Consume());
-        auto expr = MakeUnique<IfExceptExpr>(loc);
-
-        CHECK_RESULT(ParseIfExceptHeader(expr.get()));
-
-        if (PeekMatchExpr()) {
-          ExprList cond;
-          CHECK_RESULT(ParseExpr(&cond));
-          exprs->splice(exprs->end(), cond);
-        }
-
-        if (MatchLpar(TokenType::Then)) {
-          CHECK_RESULT(ParseTerminatingInstrList(&expr->true_.exprs));
-          expr->true_.end_loc = GetLocation();
-          EXPECT(Rpar);
-
-          if (MatchLpar(TokenType::Else)) {
-            CHECK_RESULT(ParseTerminatingInstrList(&expr->false_));
-            EXPECT(Rpar);
-          } else if (PeekMatchExpr()) {
-            CHECK_RESULT(ParseExpr(&expr->false_));
-          }
-          expr->false_end_loc = GetLocation();
-        } else if (PeekMatchExpr()) {
-          CHECK_RESULT(ParseExpr(&expr->true_.exprs));
-          expr->true_.end_loc = GetLocation();
-          if (PeekMatchExpr()) {
-            CHECK_RESULT(ParseExpr(&expr->false_));
-            expr->false_end_loc = GetLocation();
-          }
-        } else {
-          ConsumeIfLpar();
-          return ErrorExpected({"then block"}, "(then ...)");
-        }
-
-        exprs->push_back(std::move(expr));
+        CHECK_RESULT(ParseIfExpr<IfExceptExpr>(loc, exprs));
         break;
-      }
 
-      case TokenType::Try: {
+      case TokenType::Try:
         Consume();
         ErrorUnlessOpcodeEnabled(Consume());
-
-        auto expr = MakeUnique<TryExpr>(loc);
-        CHECK_RESULT(ParseLabelOpt(&expr->block.label));
-        CHECK_RESULT(ParseBlockDeclaration(&expr->block.decl));
-        CHECK_RESULT(ParseInstrList(&expr->block.exprs));
-        expr->block.end_loc = GetLocation();
+        CHECK_RESULT(ParseBlock<TryExpr>(loc, exprs));
         EXPECT(Lpar);
         EXPECT(Catch);
-        CHECK_RESULT(ParseTerminatingInstrList(&expr->catch_));
+        exprs->push_back(MakeUnique<CatchExpr>());
+        CHECK_RESULT(ParseTerminatingInstrList(exprs));
         EXPECT(Rpar);
-        exprs->push_back(std::move(expr));
+        exprs->push_back(MakeUnique<EndExpr>(GetLocation()));
         break;
-      }
 
       default:
         assert(!"ParseExpr should only be called when IsExpr() is true");
@@ -2099,6 +2030,50 @@ Result WastParser::ParseExpr(ExprList* exprs) {
   }
 
   EXPECT(Rpar);
+  return Result::Ok;
+}
+
+template <typename T>
+Result WastParser::ParseIfExpr(Location loc, ExprList* exprs) {
+  auto expr = MakeUnique<T>(loc);
+  CHECK_RESULT(ParseBlockHeader<T>(expr.get()));
+
+  if (PeekMatchExpr()) {
+    ExprList cond;
+    CHECK_RESULT(ParseExpr(&cond));
+    exprs->splice(exprs->end(), cond);
+  }
+
+  exprs->push_back(std::move(expr));
+
+  if (MatchLpar(TokenType::Then)) {
+    // (if (then ...) ...)
+    CHECK_RESULT(ParseTerminatingInstrList(exprs));
+    EXPECT(Rpar);
+
+    if (MatchLpar(TokenType::Else)) {
+      // (if (then ...) (else ...))
+      exprs->push_back(MakeUnique<ElseExpr>(GetLocation()));
+      CHECK_RESULT(ParseTerminatingInstrList(exprs));
+      EXPECT(Rpar);
+    } else if (PeekMatchExpr()) {
+      // (if (then ...) (<else>))
+      exprs->push_back(MakeUnique<ElseExpr>(GetLocation()));
+      CHECK_RESULT(ParseExpr(exprs));
+    }
+  } else if (PeekMatchExpr()) {
+    // (if (<then>) ...)
+    CHECK_RESULT(ParseExpr(exprs));
+    if (PeekMatchExpr()) {
+      // (if (<then>) (<else>))
+      exprs->push_back(MakeUnique<ElseExpr>(GetLocation()));
+      CHECK_RESULT(ParseExpr(exprs));
+    }
+  } else {
+    ConsumeIfLpar();
+    return ErrorExpected({"then block"}, "(then ...)");
+  }
+  exprs->push_back(MakeUnique<EndExpr>(GetLocation()));
   return Result::Ok;
 }
 

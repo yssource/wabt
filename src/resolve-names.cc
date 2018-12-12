@@ -36,8 +36,7 @@ class NameResolver : public ExprVisitor::DelegateNop {
   Result VisitScript(Script* script);
 
   // Implementation of ExprVisitor::DelegateNop.
-  Result BeginBlockExpr(BlockExpr*) override;
-  Result EndBlockExpr(BlockExpr*) override;
+  Result OnBlockExpr(BlockExpr*) override;
   Result OnBrExpr(BrExpr*) override;
   Result OnBrIfExpr(BrIfExpr*) override;
   Result OnBrTableExpr(BrTableExpr*) override;
@@ -45,14 +44,12 @@ class NameResolver : public ExprVisitor::DelegateNop {
   Result OnCallIndirectExpr(CallIndirectExpr*) override;
   Result OnReturnCallExpr(ReturnCallExpr *) override;
   Result OnReturnCallIndirectExpr(ReturnCallIndirectExpr*) override;
+  Result OnEndExpr(EndExpr*) override;
   Result OnGetGlobalExpr(GetGlobalExpr*) override;
   Result OnGetLocalExpr(GetLocalExpr*) override;
-  Result BeginIfExpr(IfExpr*) override;
-  Result EndIfExpr(IfExpr*) override;
-  Result BeginIfExceptExpr(IfExceptExpr*) override;
-  Result EndIfExceptExpr(IfExceptExpr*) override;
-  Result BeginLoopExpr(LoopExpr*) override;
-  Result EndLoopExpr(LoopExpr*) override;
+  Result OnIfExpr(IfExpr*) override;
+  Result OnIfExceptExpr(IfExceptExpr*) override;
+  Result OnLoopExpr(LoopExpr*) override;
   Result OnMemoryDropExpr(MemoryDropExpr*) override;
   Result OnMemoryInitExpr(MemoryInitExpr*) override;
   Result OnSetGlobalExpr(SetGlobalExpr*) override;
@@ -60,8 +57,7 @@ class NameResolver : public ExprVisitor::DelegateNop {
   Result OnTableDropExpr(TableDropExpr*) override;
   Result OnTableInitExpr(TableInitExpr*) override;
   Result OnTeeLocalExpr(TeeLocalExpr*) override;
-  Result BeginTryExpr(TryExpr*) override;
-  Result EndTryExpr(TryExpr*) override;
+  Result OnTryExpr(TryExpr*) override;
   Result OnThrowExpr(ThrowExpr*) override;
 
  private:
@@ -226,25 +222,20 @@ void NameResolver::ResolveBlockDeclarationVar(BlockDeclaration* decl) {
   }
 }
 
-Result NameResolver::BeginBlockExpr(BlockExpr* expr) {
+Result NameResolver::OnBlockExpr(BlockExpr* expr) {
   PushLabel(expr->block.label);
   ResolveBlockDeclarationVar(&expr->block.decl);
   return Result::Ok;
 }
 
-Result NameResolver::EndBlockExpr(BlockExpr* expr) {
+Result NameResolver::OnEndExpr(EndExpr* expr) {
   PopLabel();
   return Result::Ok;
 }
 
-Result NameResolver::BeginLoopExpr(LoopExpr* expr) {
+Result NameResolver::OnLoopExpr(LoopExpr* expr) {
   PushLabel(expr->block.label);
   ResolveBlockDeclarationVar(&expr->block.decl);
-  return Result::Ok;
-}
-
-Result NameResolver::EndLoopExpr(LoopExpr* expr) {
-  PopLabel();
   return Result::Ok;
 }
 
@@ -299,26 +290,16 @@ Result NameResolver::OnGetLocalExpr(GetLocalExpr* expr) {
   return Result::Ok;
 }
 
-Result NameResolver::BeginIfExpr(IfExpr* expr) {
-  PushLabel(expr->true_.label);
-  ResolveBlockDeclarationVar(&expr->true_.decl);
+Result NameResolver::OnIfExpr(IfExpr* expr) {
+  PushLabel(expr->block.label);
+  ResolveBlockDeclarationVar(&expr->block.decl);
   return Result::Ok;
 }
 
-Result NameResolver::EndIfExpr(IfExpr* expr) {
-  PopLabel();
-  return Result::Ok;
-}
-
-Result NameResolver::BeginIfExceptExpr(IfExceptExpr* expr) {
-  PushLabel(expr->true_.label);
-  ResolveBlockDeclarationVar(&expr->true_.decl);
+Result NameResolver::OnIfExceptExpr(IfExceptExpr* expr) {
+  PushLabel(expr->block.label);
+  ResolveBlockDeclarationVar(&expr->block.decl);
   ResolveExceptionVar(&expr->except_var);
-  return Result::Ok;
-}
-
-Result NameResolver::EndIfExceptExpr(IfExceptExpr* expr) {
-  PopLabel();
   return Result::Ok;
 }
 
@@ -357,14 +338,9 @@ Result NameResolver::OnTeeLocalExpr(TeeLocalExpr* expr) {
   return Result::Ok;
 }
 
-Result NameResolver::BeginTryExpr(TryExpr* expr) {
+Result NameResolver::OnTryExpr(TryExpr* expr) {
   PushLabel(expr->block.label);
   ResolveBlockDeclarationVar(&expr->block.decl);
-  return Result::Ok;
-}
-
-Result NameResolver::EndTryExpr(TryExpr*) {
-  PopLabel();
   return Result::Ok;
 }
 

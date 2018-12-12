@@ -406,8 +406,6 @@ void BinaryWriter::WriteExpr(const Func* func, const Expr* expr) {
     case ExprType::Block:
       WriteOpcode(stream_, Opcode::Block);
       WriteBlockDecl(cast<BlockExpr>(expr)->block.decl);
-      WriteExprList(func, cast<BlockExpr>(expr)->block.exprs);
-      WriteOpcode(stream_, Opcode::End);
       break;
     case ExprType::Br:
       WriteOpcode(stream_, Opcode::Br);
@@ -460,6 +458,9 @@ void BinaryWriter::WriteExpr(const Func* func, const Expr* expr) {
       WriteU32Leb128(stream_, 0, "return_call_indirect reserved");
       break;
     }
+    case ExprType::Catch:
+      WriteOpcode(stream_, Opcode::Catch);
+      break;
     case ExprType::Compare:
       WriteOpcode(stream_, cast<CompareExpr>(expr)->opcode);
       break;
@@ -498,6 +499,12 @@ void BinaryWriter::WriteExpr(const Func* func, const Expr* expr) {
     case ExprType::Drop:
       WriteOpcode(stream_, Opcode::Drop);
       break;
+    case ExprType::Else:
+      WriteOpcode(stream_, Opcode::Else);
+      break;
+    case ExprType::End:
+      WriteOpcode(stream_, Opcode::End);
+      break;
     case ExprType::GetGlobal: {
       Index index = module_->GetGlobalIndex(cast<GetGlobalExpr>(expr)->var);
       WriteOpcode(stream_, Opcode::GetGlobal);
@@ -513,27 +520,15 @@ void BinaryWriter::WriteExpr(const Func* func, const Expr* expr) {
     case ExprType::If: {
       auto* if_expr = cast<IfExpr>(expr);
       WriteOpcode(stream_, Opcode::If);
-      WriteBlockDecl(if_expr->true_.decl);
-      WriteExprList(func, if_expr->true_.exprs);
-      if (!if_expr->false_.empty()) {
-        WriteOpcode(stream_, Opcode::Else);
-        WriteExprList(func, if_expr->false_);
-      }
-      WriteOpcode(stream_, Opcode::End);
+      WriteBlockDecl(if_expr->block.decl);
       break;
     }
     case ExprType::IfExcept: {
       auto* if_except_expr = cast<IfExceptExpr>(expr);
       WriteOpcode(stream_, Opcode::IfExcept);
-      WriteBlockDecl(if_except_expr->true_.decl);
+      WriteBlockDecl(if_except_expr->block.decl);
       Index index = module_->GetExceptIndex(if_except_expr->except_var);
       WriteU32Leb128(stream_, index, "exception index");
-      WriteExprList(func, if_except_expr->true_.exprs);
-      if (!if_except_expr->false_.empty()) {
-        WriteOpcode(stream_, Opcode::Else);
-        WriteExprList(func, if_except_expr->false_);
-      }
-      WriteOpcode(stream_, Opcode::End);
       break;
     }
     case ExprType::Load:
@@ -542,8 +537,6 @@ void BinaryWriter::WriteExpr(const Func* func, const Expr* expr) {
     case ExprType::Loop:
       WriteOpcode(stream_, Opcode::Loop);
       WriteBlockDecl(cast<LoopExpr>(expr)->block.decl);
-      WriteExprList(func, cast<LoopExpr>(expr)->block.exprs);
-      WriteOpcode(stream_, Opcode::End);
       break;
     case ExprType::MemoryCopy:
       WriteOpcode(stream_, Opcode::MemoryCopy);
@@ -637,10 +630,6 @@ void BinaryWriter::WriteExpr(const Func* func, const Expr* expr) {
       auto* try_expr = cast<TryExpr>(expr);
       WriteOpcode(stream_, Opcode::Try);
       WriteBlockDecl(try_expr->block.decl);
-      WriteExprList(func, try_expr->block.exprs);
-      WriteOpcode(stream_, Opcode::Catch);
-      WriteExprList(func, try_expr->catch_);
-      WriteOpcode(stream_, Opcode::End);
       break;
     }
     case ExprType::Unary:

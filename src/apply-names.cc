@@ -35,23 +35,20 @@ class NameApplier : public ExprVisitor::DelegateNop {
   Result VisitModule(Module* module);
 
   // Implementation of ExprVisitor::DelegateNop.
-  Result BeginBlockExpr(BlockExpr*) override;
-  Result EndBlockExpr(BlockExpr*) override;
+  Result OnBlockExpr(BlockExpr*) override;
   Result OnBrExpr(BrExpr*) override;
   Result OnBrIfExpr(BrIfExpr*) override;
   Result OnBrTableExpr(BrTableExpr*) override;
   Result OnCallExpr(CallExpr*) override;
   Result OnCallIndirectExpr(CallIndirectExpr*) override;
+  Result OnEndExpr(EndExpr*) override;
   Result OnReturnCallExpr(ReturnCallExpr*) override;
   Result OnReturnCallIndirectExpr(ReturnCallIndirectExpr*) override;
   Result OnGetGlobalExpr(GetGlobalExpr*) override;
   Result OnGetLocalExpr(GetLocalExpr*) override;
-  Result BeginIfExpr(IfExpr*) override;
-  Result EndIfExpr(IfExpr*) override;
-  Result BeginIfExceptExpr(IfExceptExpr*) override;
-  Result EndIfExceptExpr(IfExceptExpr*) override;
-  Result BeginLoopExpr(LoopExpr*) override;
-  Result EndLoopExpr(LoopExpr*) override;
+  Result OnIfExpr(IfExpr*) override;
+  Result OnIfExceptExpr(IfExceptExpr*) override;
+  Result OnLoopExpr(LoopExpr*) override;
   Result OnMemoryDropExpr(MemoryDropExpr*) override;
   Result OnMemoryInitExpr(MemoryInitExpr*) override;
   Result OnSetGlobalExpr(SetGlobalExpr*) override;
@@ -59,8 +56,7 @@ class NameApplier : public ExprVisitor::DelegateNop {
   Result OnTableDropExpr(TableDropExpr*) override;
   Result OnTableInitExpr(TableInitExpr*) override;
   Result OnTeeLocalExpr(TeeLocalExpr*) override;
-  Result BeginTryExpr(TryExpr*) override;
-  Result EndTryExpr(TryExpr*) override;
+  Result OnTryExpr(TryExpr*) override;
   Result OnThrowExpr(ThrowExpr*) override;
 
  private:
@@ -218,23 +214,18 @@ Result NameApplier::UseNameForParamAndLocalVar(Func* func, Var* var) {
   return Result::Ok;
 }
 
-Result NameApplier::BeginBlockExpr(BlockExpr* expr) {
+Result NameApplier::OnBlockExpr(BlockExpr* expr) {
   PushLabel(expr->block.label);
   return Result::Ok;
 }
 
-Result NameApplier::EndBlockExpr(BlockExpr* expr) {
+Result NameApplier::OnEndExpr(EndExpr* expr) {
   PopLabel();
   return Result::Ok;
 }
 
-Result NameApplier::BeginLoopExpr(LoopExpr* expr) {
+Result NameApplier::OnLoopExpr(LoopExpr* expr) {
   PushLabel(expr->block.label);
-  return Result::Ok;
-}
-
-Result NameApplier::EndLoopExpr(LoopExpr* expr) {
-  PopLabel();
   return Result::Ok;
 }
 
@@ -281,13 +272,8 @@ Result NameApplier::OnBrTableExpr(BrTableExpr* expr) {
   return Result::Ok;
 }
 
-Result NameApplier::BeginTryExpr(TryExpr* expr) {
+Result NameApplier::OnTryExpr(TryExpr* expr) {
   PushLabel(expr->block.label);
-  return Result::Ok;
-}
-
-Result NameApplier::EndTryExpr(TryExpr*) {
-  PopLabel();
   return Result::Ok;
 }
 
@@ -330,24 +316,14 @@ Result NameApplier::OnGetLocalExpr(GetLocalExpr* expr) {
   return Result::Ok;
 }
 
-Result NameApplier::BeginIfExpr(IfExpr* expr) {
-  PushLabel(expr->true_.label);
+Result NameApplier::OnIfExpr(IfExpr* expr) {
+  PushLabel(expr->block.label);
   return Result::Ok;
 }
 
-Result NameApplier::EndIfExpr(IfExpr* expr) {
-  PopLabel();
-  return Result::Ok;
-}
-
-Result NameApplier::BeginIfExceptExpr(IfExceptExpr* expr) {
-  PushLabel(expr->true_.label);
+Result NameApplier::OnIfExceptExpr(IfExceptExpr* expr) {
+  PushLabel(expr->block.label);
   CHECK_RESULT(UseNameForExceptVar(&expr->except_var));
-  return Result::Ok;
-}
-
-Result NameApplier::EndIfExceptExpr(IfExceptExpr* expr) {
-  PopLabel();
   return Result::Ok;
 }
 

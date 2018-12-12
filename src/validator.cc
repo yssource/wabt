@@ -44,28 +44,25 @@ class Validator : public ExprVisitor::Delegate {
 
   // Implements ExprVisitor::Delegate.
   Result OnBinaryExpr(BinaryExpr*) override;
-  Result BeginBlockExpr(BlockExpr*) override;
-  Result EndBlockExpr(BlockExpr*) override;
+  Result OnBlockExpr(BlockExpr*) override;
   Result OnBrExpr(BrExpr*) override;
   Result OnBrIfExpr(BrIfExpr*) override;
   Result OnBrTableExpr(BrTableExpr*) override;
   Result OnCallExpr(CallExpr*) override;
   Result OnCallIndirectExpr(CallIndirectExpr*) override;
+  Result OnCatchExpr(CatchExpr*) override;
   Result OnCompareExpr(CompareExpr*) override;
   Result OnConstExpr(ConstExpr*) override;
   Result OnConvertExpr(ConvertExpr*) override;
   Result OnDropExpr(DropExpr*) override;
+  Result OnElseExpr(ElseExpr*) override;
+  Result OnEndExpr(EndExpr*) override;
   Result OnGetGlobalExpr(GetGlobalExpr*) override;
   Result OnGetLocalExpr(GetLocalExpr*) override;
-  Result BeginIfExpr(IfExpr*) override;
-  Result AfterIfTrueExpr(IfExpr*) override;
-  Result EndIfExpr(IfExpr*) override;
-  Result BeginIfExceptExpr(IfExceptExpr*) override;
-  Result AfterIfExceptTrueExpr(IfExceptExpr*) override;
-  Result EndIfExceptExpr(IfExceptExpr*) override;
+  Result OnIfExpr(IfExpr*) override;
+  Result OnIfExceptExpr(IfExceptExpr*) override;
   Result OnLoadExpr(LoadExpr*) override;
-  Result BeginLoopExpr(LoopExpr*) override;
-  Result EndLoopExpr(LoopExpr*) override;
+  Result OnLoopExpr(LoopExpr*) override;
   Result OnMemoryCopyExpr(MemoryCopyExpr*) override;
   Result OnMemoryDropExpr(MemoryDropExpr*) override;
   Result OnMemoryFillExpr(MemoryFillExpr*) override;
@@ -86,9 +83,7 @@ class Validator : public ExprVisitor::Delegate {
   Result OnTeeLocalExpr(TeeLocalExpr*) override;
   Result OnUnaryExpr(UnaryExpr*) override;
   Result OnUnreachableExpr(UnreachableExpr*) override;
-  Result BeginTryExpr(TryExpr*) override;
-  Result OnCatchExpr(TryExpr*) override;
-  Result EndTryExpr(TryExpr*) override;
+  Result OnTryExpr(TryExpr*) override;
   Result OnThrowExpr(ThrowExpr*) override;
   Result OnRethrowExpr(RethrowExpr*) override;
   Result OnAtomicWaitExpr(AtomicWaitExpr*) override;
@@ -550,17 +545,11 @@ Result Validator::OnBinaryExpr(BinaryExpr* expr) {
   return Result::Ok;
 }
 
-Result Validator::BeginBlockExpr(BlockExpr* expr) {
+Result Validator::OnBlockExpr(BlockExpr* expr) {
   expr_loc_ = &expr->loc;
   CheckBlockDeclaration(&expr->loc, Opcode::Block, &expr->block.decl);
   typechecker_.OnBlock(expr->block.decl.sig.param_types,
                        expr->block.decl.sig.result_types);
-  return Result::Ok;
-}
-
-Result Validator::EndBlockExpr(BlockExpr* expr) {
-  expr_loc_ = &expr->block.end_loc;
-  typechecker_.OnEnd();
   return Result::Ok;
 }
 
@@ -608,6 +597,12 @@ Result Validator::OnCallIndirectExpr(CallIndirectExpr* expr) {
   return Result::Ok;
 }
 
+Result Validator::OnCatchExpr(CatchExpr* expr) {
+  expr_loc_ = &expr->loc;
+  typechecker_.OnCatch();
+  return Result::Ok;
+}
+
 Result Validator::OnCompareExpr(CompareExpr* expr) {
   expr_loc_ = &expr->loc;
   typechecker_.OnCompare(expr->opcode);
@@ -632,6 +627,18 @@ Result Validator::OnDropExpr(DropExpr* expr) {
   return Result::Ok;
 }
 
+Result Validator::OnElseExpr(ElseExpr* expr) {
+  expr_loc_ = &expr->loc;
+  typechecker_.OnElse();
+  return Result::Ok;
+}
+
+Result Validator::OnEndExpr(EndExpr* expr) {
+  expr_loc_ = &expr->loc;
+  typechecker_.OnEnd();
+  return Result::Ok;
+}
+
 Result Validator::OnGetGlobalExpr(GetGlobalExpr* expr) {
   expr_loc_ = &expr->loc;
   typechecker_.OnGetGlobal(GetGlobalVarTypeOrAny(&expr->var));
@@ -644,52 +651,24 @@ Result Validator::OnGetLocalExpr(GetLocalExpr* expr) {
   return Result::Ok;
 }
 
-Result Validator::BeginIfExpr(IfExpr* expr) {
+Result Validator::OnIfExpr(IfExpr* expr) {
   expr_loc_ = &expr->loc;
-  CheckBlockDeclaration(&expr->loc, Opcode::If, &expr->true_.decl);
-  typechecker_.OnIf(expr->true_.decl.sig.param_types,
-                    expr->true_.decl.sig.result_types);
+  CheckBlockDeclaration(&expr->loc, Opcode::If, &expr->block.decl);
+  typechecker_.OnIf(expr->block.decl.sig.param_types,
+                    expr->block.decl.sig.result_types);
   return Result::Ok;
 }
 
-Result Validator::AfterIfTrueExpr(IfExpr* expr) {
-  if (!expr->false_.empty()) {
-    typechecker_.OnElse();
-  }
-  return Result::Ok;
-}
-
-Result Validator::EndIfExpr(IfExpr* expr) {
-  expr_loc_ =
-      expr->false_.empty() ? &expr->true_.end_loc : &expr->false_end_loc;
-  typechecker_.OnEnd();
-  return Result::Ok;
-}
-
-Result Validator::BeginIfExceptExpr(IfExceptExpr* expr) {
+Result Validator::OnIfExceptExpr(IfExceptExpr* expr) {
   expr_loc_ = &expr->loc;
-  CheckBlockDeclaration(&expr->loc, Opcode::IfExcept, &expr->true_.decl);
+  CheckBlockDeclaration(&expr->loc, Opcode::IfExcept, &expr->block.decl);
   const Exception* except;
   TypeVector except_sig;
   if (Succeeded(CheckExceptVar(&expr->except_var, &except))) {
     except_sig = except->sig;
   }
-  typechecker_.OnIfExcept(expr->true_.decl.sig.param_types,
-                          expr->true_.decl.sig.result_types, except_sig);
-  return Result::Ok;
-}
-
-Result Validator::AfterIfExceptTrueExpr(IfExceptExpr* expr) {
-  if (!expr->false_.empty()) {
-    typechecker_.OnElse();
-  }
-  return Result::Ok;
-}
-
-Result Validator::EndIfExceptExpr(IfExceptExpr* expr) {
-  expr_loc_ =
-      expr->false_.empty() ? &expr->true_.end_loc : &expr->false_end_loc;
-  typechecker_.OnEnd();
+  typechecker_.OnIfExcept(expr->block.decl.sig.param_types,
+                          expr->block.decl.sig.result_types, except_sig);
   return Result::Ok;
 }
 
@@ -702,17 +681,11 @@ Result Validator::OnLoadExpr(LoadExpr* expr) {
   return Result::Ok;
 }
 
-Result Validator::BeginLoopExpr(LoopExpr* expr) {
+Result Validator::OnLoopExpr(LoopExpr* expr) {
   expr_loc_ = &expr->loc;
   CheckBlockDeclaration(&expr->loc, Opcode::Loop, &expr->block.decl);
   typechecker_.OnLoop(expr->block.decl.sig.param_types,
                       expr->block.decl.sig.result_types);
-  return Result::Ok;
-}
-
-Result Validator::EndLoopExpr(LoopExpr* expr) {
-  expr_loc_ = &expr->block.end_loc;
-  typechecker_.OnEnd();
   return Result::Ok;
 }
 
@@ -871,22 +844,11 @@ Result Validator::OnUnreachableExpr(UnreachableExpr* expr) {
   return Result::Ok;
 }
 
-Result Validator::BeginTryExpr(TryExpr* expr) {
+Result Validator::OnTryExpr(TryExpr* expr) {
   expr_loc_ = &expr->loc;
   CheckBlockDeclaration(&expr->loc, Opcode::Try, &expr->block.decl);
   typechecker_.OnTry(expr->block.decl.sig.param_types,
                      expr->block.decl.sig.result_types);
-  return Result::Ok;
-}
-
-Result Validator::OnCatchExpr(TryExpr* expr) {
-  typechecker_.OnCatch();
-  return Result::Ok;
-}
-
-Result Validator::EndTryExpr(TryExpr* expr) {
-  expr_loc_ = &expr->block.end_loc;
-  typechecker_.OnEnd();
   return Result::Ok;
 }
 
@@ -1509,7 +1471,7 @@ class Validator::CheckFuncSignatureExprVisitorDelegate
   explicit CheckFuncSignatureExprVisitorDelegate(Validator* validator)
       : validator_(validator) {}
 
-  Result BeginBlockExpr(BlockExpr* expr) override {
+  Result OnBlockExpr(BlockExpr* expr) override {
     validator_->CheckBlockDeclaration(&expr->loc, Opcode::Block,
                                       &expr->block.decl);
     return Result::Ok;
@@ -1525,25 +1487,25 @@ class Validator::CheckFuncSignatureExprVisitorDelegate
     return Result::Ok;
   }
 
-  Result BeginIfExpr(IfExpr* expr) override {
+  Result OnIfExpr(IfExpr* expr) override {
     validator_->CheckBlockDeclaration(&expr->loc, Opcode::If,
-                                      &expr->true_.decl);
+                                      &expr->block.decl);
     return Result::Ok;
   }
 
-  Result BeginIfExceptExpr(IfExceptExpr* expr) override {
+  Result OnIfExceptExpr(IfExceptExpr* expr) override {
     validator_->CheckBlockDeclaration(&expr->loc, Opcode::IfExcept,
-                                      &expr->true_.decl);
+                                      &expr->block.decl);
     return Result::Ok;
   }
 
-  Result BeginLoopExpr(LoopExpr* expr) override {
+  Result OnLoopExpr(LoopExpr* expr) override {
     validator_->CheckBlockDeclaration(&expr->loc, Opcode::Loop,
                                       &expr->block.decl);
     return Result::Ok;
   }
 
-  Result BeginTryExpr(TryExpr* expr) override {
+  Result OnTryExpr(TryExpr* expr) override {
     validator_->CheckBlockDeclaration(&expr->loc, Opcode::Try,
                                       &expr->block.decl);
     return Result::Ok;

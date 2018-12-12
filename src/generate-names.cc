@@ -36,10 +36,10 @@ class NameGenerator : public ExprVisitor::DelegateNop {
   Result VisitModule(Module* module);
 
   // Implementation of ExprVisitor::DelegateNop.
-  Result BeginBlockExpr(BlockExpr* expr) override;
-  Result BeginLoopExpr(LoopExpr* expr) override;
-  Result BeginIfExpr(IfExpr* expr) override;
-  Result BeginIfExceptExpr(IfExceptExpr* expr) override;
+  Result OnBlockExpr(BlockExpr* expr) override;
+  Result OnLoopExpr(LoopExpr* expr) override;
+  Result OnIfExpr(IfExpr* expr) override;
+  Result OnIfExceptExpr(IfExceptExpr* expr) override;
 
  private:
   static bool HasName(const std::string& str);
@@ -202,23 +202,23 @@ void NameGenerator::GenerateAndBindLocalNames(Func* func) {
   }
 }
 
-Result NameGenerator::BeginBlockExpr(BlockExpr* expr) {
+Result NameGenerator::OnBlockExpr(BlockExpr* expr) {
   MaybeGenerateName("$B", label_count_++, &expr->block.label);
   return Result::Ok;
 }
 
-Result NameGenerator::BeginLoopExpr(LoopExpr* expr) {
+Result NameGenerator::OnLoopExpr(LoopExpr* expr) {
   MaybeGenerateName("$L", label_count_++, &expr->block.label);
   return Result::Ok;
 }
 
-Result NameGenerator::BeginIfExpr(IfExpr* expr) {
-  MaybeGenerateName("$I", label_count_++, &expr->true_.label);
+Result NameGenerator::OnIfExpr(IfExpr* expr) {
+  MaybeGenerateName("$I", label_count_++, &expr->block.label);
   return Result::Ok;
 }
 
-Result NameGenerator::BeginIfExceptExpr(IfExceptExpr* expr) {
-  MaybeGenerateName("$E", label_count_++, &expr->true_.label);
+Result NameGenerator::OnIfExceptExpr(IfExceptExpr* expr) {
+  MaybeGenerateName("$E", label_count_++, &expr->block.label);
   return Result::Ok;
 }
 

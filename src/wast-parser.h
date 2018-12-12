@@ -161,14 +161,19 @@ class WastParser {
   Result ParsePlainInstr(std::unique_ptr<Expr>*);
   Result ParseConst(Const*);
   Result ParseConstList(ConstVector*);
-  Result ParseBlockInstr(std::unique_ptr<Expr>*);
+  Result ParseBlockInstr(ExprList*);
   Result ParseLabelOpt(std::string*);
+  Result ParseEnd(ExprList*, const std::string& label);
   Result ParseEndLabelOpt(const std::string&);
   Result ParseBlockDeclaration(BlockDeclaration*);
-  Result ParseBlock(Block*);
-  Result ParseIfExceptHeader(IfExceptExpr*);
+  template <typename T>
+  Result ParseBlockHeader(T*);
+  template <typename T>
+  Result ParseBlock(Location, ExprList*, std::string* out_label = nullptr);
   Result ParseExprList(ExprList*);
   Result ParseExpr(ExprList*);
+  template <typename T>
+  Result ParseIfExpr(Location, ExprList*);
   Result ParseGlobalType(Global*);
 
   template <typename T>

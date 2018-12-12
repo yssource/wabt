@@ -155,56 +155,64 @@ struct FuncDeclaration {
   FuncSignature sig;
 };
 
+#define WABT_FOREACH_EXPR_TYPE(V) \
+  V(AtomicLoad)                   \
+  V(AtomicRmw)                    \
+  V(AtomicRmwCmpxchg)             \
+  V(AtomicStore)                  \
+  V(AtomicWait)                   \
+  V(AtomicWake)                   \
+  V(Binary)                       \
+  V(Block)                        \
+  V(Br)                           \
+  V(BrIf)                         \
+  V(BrTable)                      \
+  V(Call)                         \
+  V(CallIndirect)                 \
+  V(Catch)                        \
+  V(Compare)                      \
+  V(Const)                        \
+  V(Convert)                      \
+  V(Drop)                         \
+  V(Else)                         \
+  V(End)                          \
+  V(GetGlobal)                    \
+  V(GetLocal)                     \
+  V(If)                           \
+  V(IfExcept)                     \
+  V(Load)                         \
+  V(Loop)                         \
+  V(MemoryCopy)                   \
+  V(MemoryDrop)                   \
+  V(MemoryFill)                   \
+  V(MemoryGrow)                   \
+  V(MemoryInit)                   \
+  V(MemorySize)                   \
+  V(Nop)                          \
+  V(Rethrow)                      \
+  V(Return)                       \
+  V(ReturnCall)                   \
+  V(ReturnCallIndirect)           \
+  V(Select)                       \
+  V(SetGlobal)                    \
+  V(SetLocal)                     \
+  V(SimdLaneOp)                   \
+  V(SimdShuffleOp)                \
+  V(Store)                        \
+  V(TableInit)                    \
+  V(TableCopy)                    \
+  V(TableDrop)                    \
+  V(TeeLocal)                     \
+  V(Ternary)                      \
+  V(Throw)                        \
+  V(Try)                          \
+  V(Unary)                        \
+  V(Unreachable)
+
 enum class ExprType {
-  AtomicLoad,
-  AtomicRmw,
-  AtomicRmwCmpxchg,
-  AtomicStore,
-  AtomicWait,
-  AtomicWake,
-  Binary,
-  Block,
-  Br,
-  BrIf,
-  BrTable,
-  Call,
-  CallIndirect,
-  Compare,
-  Const,
-  Convert,
-  Drop,
-  GetGlobal,
-  GetLocal,
-  If,
-  IfExcept,
-  Load,
-  Loop,
-  MemoryCopy,
-  MemoryDrop,
-  MemoryFill,
-  MemoryGrow,
-  MemoryInit,
-  MemorySize,
-  Nop,
-  Rethrow,
-  Return,
-  ReturnCall,
-  ReturnCallIndirect,
-  Select,
-  SetGlobal,
-  SetLocal,
-  SimdLaneOp,
-  SimdShuffleOp,
-  Store,
-  TableInit,
-  TableCopy,
-  TableDrop,
-  TeeLocal,
-  Ternary,
-  Throw,
-  Try,
-  Unary,
-  Unreachable,
+#define WABT_EXPR_TYPE(Name) Name,
+  WABT_FOREACH_EXPR_TYPE(WABT_EXPR_TYPE)
+#undef WABT_EXPR_TYPE
 
   First = AtomicLoad,
   Last = Unreachable
@@ -219,12 +227,9 @@ typedef FuncDeclaration BlockDeclaration;
 
 struct Block {
   Block() = default;
-  explicit Block(ExprList exprs) : exprs(std::move(exprs)) {}
 
   std::string label;
   BlockDeclaration decl;
-  ExprList exprs;
-  Location end_loc;
 };
 
 class Expr : public intrusive_list_base<Expr> {
@@ -254,16 +259,19 @@ class ExprMixin : public Expr {
   explicit ExprMixin(const Location& loc = Location()) : Expr(TypeEnum, loc) {}
 };
 
+typedef ExprMixin<ExprType::Catch> CatchExpr;
 typedef ExprMixin<ExprType::Drop> DropExpr;
-typedef ExprMixin<ExprType::MemoryGrow> MemoryGrowExpr;
-typedef ExprMixin<ExprType::MemorySize> MemorySizeExpr;
+typedef ExprMixin<ExprType::Else> ElseExpr;
+typedef ExprMixin<ExprType::End> EndExpr;
 typedef ExprMixin<ExprType::MemoryCopy> MemoryCopyExpr;
 typedef ExprMixin<ExprType::MemoryFill> MemoryFillExpr;
-typedef ExprMixin<ExprType::TableCopy> TableCopyExpr;
+typedef ExprMixin<ExprType::MemoryGrow> MemoryGrowExpr;
+typedef ExprMixin<ExprType::MemorySize> MemorySizeExpr;
 typedef ExprMixin<ExprType::Nop> NopExpr;
 typedef ExprMixin<ExprType::Rethrow> RethrowExpr;
 typedef ExprMixin<ExprType::Return> ReturnExpr;
 typedef ExprMixin<ExprType::Select> SelectExpr;
+typedef ExprMixin<ExprType::TableCopy> TableCopyExpr;
 typedef ExprMixin<ExprType::Unreachable> UnreachableExpr;
 
 template <ExprType TypeEnum>
@@ -350,35 +358,16 @@ class BlockExprBase : public ExprMixin<TypeEnum> {
 
 typedef BlockExprBase<ExprType::Block> BlockExpr;
 typedef BlockExprBase<ExprType::Loop> LoopExpr;
-
-class IfExpr : public ExprMixin<ExprType::If> {
- public:
-  explicit IfExpr(const Location& loc = Location())
-      : ExprMixin<ExprType::If>(loc) {}
-
-  Block true_;
-  ExprList false_;
-  Location false_end_loc;
-};
+typedef BlockExprBase<ExprType::If> IfExpr;
+typedef BlockExprBase<ExprType::Try> TryExpr;
 
 class IfExceptExpr : public ExprMixin<ExprType::IfExcept> {
  public:
   explicit IfExceptExpr(const Location& loc = Location())
       : ExprMixin<ExprType::IfExcept>(loc) {}
 
-  Block true_;
-  ExprList false_;
-  Location false_end_loc;
-  Var except_var;
-};
-
-class TryExpr : public ExprMixin<ExprType::Try> {
- public:
-  explicit TryExpr(const Location& loc = Location())
-      : ExprMixin<ExprType::Try>(loc) {}
-
   Block block;
-  ExprList catch_;
+  Var except_var;
 };
 
 class BrTableExpr : public ExprMixin<ExprType::BrTable> {
