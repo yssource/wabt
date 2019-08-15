@@ -19,7 +19,7 @@
 MAKEFILE_NAME := $(lastword $(MAKEFILE_LIST))
 ROOT_DIR := $(dir $(abspath $(MAKEFILE_NAME)))
 
-USE_NINJA ?= 0
+USE_NINJA ?= 1
 FUZZ_BIN_DIR ?= ${ROOT_DIR}/afl-fuzz
 GCC_FUZZ_CC := ${FUZZ_BIN_DIR}/afl-gcc
 GCC_FUZZ_CXX := ${FUZZ_BIN_DIR}/afl-g++
