@@ -326,13 +326,13 @@ class BinaryReaderInterp : public BinaryReaderNop {
                                 Address natural_alignment);
   wabt::Result CheckInFunction();
 
-  wabt::Result AppendExport(Module* module,
+  wabt::Result AppendExport(ModuleInstance* module,
                             ExternalKind kind,
                             Index item_index,
                             string_view name);
   wabt::Result FindRegisteredModule(string_view module_name,
-                                    Module** out_module);
-  wabt::Result GetModuleExport(Module* module,
+                                    ModuleInstance** out_module);
+  wabt::Result GetModuleExport(ModuleInstance* module,
                                string_view field_name,
                                Export** out_export);
 
@@ -742,7 +742,7 @@ wabt::Result BinaryReaderInterp::CheckImportLimits(
   return wabt::Result::Ok;
 }
 
-wabt::Result BinaryReaderInterp::AppendExport(Module* module,
+wabt::Result BinaryReaderInterp::AppendExport(ModuleInstance* module,
                                               ExternalKind kind,
                                               Index item_index,
                                               string_view name) {
@@ -759,8 +759,8 @@ wabt::Result BinaryReaderInterp::AppendExport(Module* module,
 }
 
 wabt::Result BinaryReaderInterp::FindRegisteredModule(string_view module_name,
-                                                      Module** out_module) {
-  Module* module = env_->FindRegisteredModule(module_name);
+                                                      ModuleInstance** out_module) {
+  ModuleInstance* module = env_->FindRegisteredModule(module_name);
   if (!module) {
     PrintError("unknown import module \"" PRIstringview "\"",
                WABT_PRINTF_STRING_VIEW_ARG(module_name));
@@ -771,7 +771,7 @@ wabt::Result BinaryReaderInterp::FindRegisteredModule(string_view module_name,
   return wabt::Result::Ok;
 }
 
-wabt::Result BinaryReaderInterp::GetModuleExport(Module* module,
+wabt::Result BinaryReaderInterp::GetModuleExport(ModuleInstance* module,
                                                  string_view field_name,
                                                  Export** out_export) {
   Export* export_ = module->GetExport(field_name);
@@ -792,7 +792,7 @@ wabt::Result BinaryReaderInterp::OnImportFunc(Index import_index,
                                               Index sig_index) {
   Index env_sig_index = TranslateSigIndexToEnv(sig_index);
 
-  Module* import_module;
+  ModuleInstance* import_module;
   CHECK_RESULT(FindRegisteredModule(module_name, &import_module));
 
   Export* export_ =
@@ -829,7 +829,7 @@ wabt::Result BinaryReaderInterp::OnImportTable(Index import_index,
     return wabt::Result::Error;
   }
 
-  Module* import_module;
+  ModuleInstance* import_module;
   CHECK_RESULT(FindRegisteredModule(module_name, &import_module));
 
   Export* export_;
@@ -853,7 +853,7 @@ wabt::Result BinaryReaderInterp::OnImportMemory(Index import_index,
     return wabt::Result::Error;
   }
 
-  Module* import_module;
+  ModuleInstance* import_module;
   CHECK_RESULT(FindRegisteredModule(module_name, &import_module));
 
   Export* export_;
@@ -873,7 +873,7 @@ wabt::Result BinaryReaderInterp::OnImportGlobal(Index import_index,
                                                 Index global_index,
                                                 Type type,
                                                 bool mutable_) {
-  Module* import_module;
+  ModuleInstance* import_module;
   CHECK_RESULT(FindRegisteredModule(module_name, &import_module));
 
   Export* export_;
