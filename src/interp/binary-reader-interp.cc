@@ -76,6 +76,7 @@ class BinaryReaderInterp : public BinaryReaderNop {
   BinaryReaderInterp(Environment* env,
                      DefinedModule* module,
                      std::unique_ptr<OutputBuffer> istream,
+                     const std::vector<Export*>& imports_,
                      Errors* errors,
                      const Features& features);
 
@@ -332,11 +333,15 @@ class BinaryReaderInterp : public BinaryReaderNop {
                             string_view name);
   wabt::Result FindRegisteredModule(string_view module_name,
                                     ModuleInstance** out_module);
-  wabt::Result GetModuleExport(ModuleInstance* module,
-                               string_view field_name,
-                               Export** out_export);
+  wabt::Result ResolveImport(Index import_index,
+                             ExternalKind kind,
+                             string_view module_name,
+                             string_view field_name,
+                             Index sig_index,
+                             Export** out_export);
 
   Features features_;
+  const std::vector<Export*>& imports_;
   Errors* errors_ = nullptr;
   Environment* env_ = nullptr;
   DefinedModule* module_ = nullptr;
@@ -379,9 +384,11 @@ class BinaryReaderInterp : public BinaryReaderNop {
 BinaryReaderInterp::BinaryReaderInterp(Environment* env,
                                        DefinedModule* module,
                                        std::unique_ptr<OutputBuffer> istream,
+                                       const std::vector<Export*>& imports,
                                        Errors* errors,
                                        const Features& features)
     : features_(features),
+      imports_(imports),
       errors_(errors),
       env_(env),
       module_(module),
@@ -771,16 +778,36 @@ wabt::Result BinaryReaderInterp::FindRegisteredModule(string_view module_name,
   return wabt::Result::Ok;
 }
 
-wabt::Result BinaryReaderInterp::GetModuleExport(ModuleInstance* module,
-                                                 string_view field_name,
-                                                 Export** out_export) {
-  Export* export_ = module->GetExport(field_name);
-  if (!export_) {
-    PrintError("unknown module field \"" PRIstringview "\"",
-               WABT_PRINTF_STRING_VIEW_ARG(field_name));
-    return wabt::Result::Error;
+wabt::Result BinaryReaderInterp::ResolveImport(Index import_index,
+                                               ExternalKind kind,
+                                               string_view module_name,
+                                               string_view field_name,
+                                               Index sig_index,
+                                               Export** out_export) {
+  Export* export_ = nullptr;
+  if (imports_.size()) {
+    export_ = imports_[import_index];
+  } else {
+    ModuleInstance* module;
+    CHECK_RESULT(FindRegisteredModule(module_name, &module));
+
+    // Func imports get special handled due to the face that they can be
+    // overloaded on signature.
+    if (kind == ExternalKind::Func) {
+      export_ = module->GetFuncExport(env_, field_name, sig_index);
+    }
+    if (!export_) {
+      export_ = module->GetExport(field_name);
+      if (!export_) {
+        PrintError("unknown module field \"" PRIstringview "\"",
+                   WABT_PRINTF_STRING_VIEW_ARG(field_name));
+        return wabt::Result::Error;
+      }
+    }
   }
 
+  CHECK_RESULT(CheckImportKind(module_name, field_name, kind,
+                               export_->kind));
   *out_export = export_;
   return wabt::Result::Ok;
 }
@@ -792,20 +819,10 @@ wabt::Result BinaryReaderInterp::OnImportFunc(Index import_index,
                                               Index sig_index) {
   Index env_sig_index = TranslateSigIndexToEnv(sig_index);
 
-  ModuleInstance* import_module;
-  CHECK_RESULT(FindRegisteredModule(module_name, &import_module));
-
-  Export* export_ =
-      import_module->GetFuncExport(env_, field_name, env_sig_index);
-  if (!export_) {
-    // If GetFuncExport fails then GetModuleExport will fail too. But it's
-    // useful to call here to share the same error handling code as other
-    // imports.
-    CHECK_RESULT(GetModuleExport(import_module, field_name, &export_));
-  }
-
-  CHECK_RESULT(CheckImportKind(module_name, field_name, ExternalKind::Func,
-                               export_->kind));
+  Export* export_;
+  CHECK_RESULT(ResolveImport(import_index, ExternalKind::Func,
+                             module_name, field_name,
+                             env_sig_index, &export_));
 
   Func* func = env_->GetFunc(export_->index);
   if (!env_->FuncSignaturesAreEqual(env_sig_index, func->sig_index)) {
@@ -829,12 +846,9 @@ wabt::Result BinaryReaderInterp::OnImportTable(Index import_index,
     return wabt::Result::Error;
   }
 
-  ModuleInstance* import_module;
-  CHECK_RESULT(FindRegisteredModule(module_name, &import_module));
-
   Export* export_;
-  CHECK_RESULT(GetModuleExport(import_module, field_name, &export_));
-  CHECK_RESULT(CheckImportKind(module_name, field_name, ExternalKind::Table, export_->kind));
+  CHECK_RESULT(ResolveImport(import_index, ExternalKind::Table,
+                             module_name, field_name, 0, &export_));
 
   Table* table = env_->GetTable(export_->index);
   CHECK_RESULT(CheckImportLimits(elem_limits, &table->limits));
@@ -853,12 +867,9 @@ wabt::Result BinaryReaderInterp::OnImportMemory(Index import_index,
     return wabt::Result::Error;
   }
 
-  ModuleInstance* import_module;
-  CHECK_RESULT(FindRegisteredModule(module_name, &import_module));
-
   Export* export_;
-  CHECK_RESULT(GetModuleExport(import_module, field_name, &export_));
-  CHECK_RESULT(CheckImportKind(module_name, field_name, ExternalKind::Memory, export_->kind));
+  CHECK_RESULT(ResolveImport(import_index, ExternalKind::Memory,
+                             module_name, field_name, 0, &export_));
 
   Memory* memory = env_->GetMemory(export_->index);
   CHECK_RESULT(CheckImportLimits(page_limits, &memory->page_limits));
@@ -873,12 +884,9 @@ wabt::Result BinaryReaderInterp::OnImportGlobal(Index import_index,
                                                 Index global_index,
                                                 Type type,
                                                 bool mutable_) {
-  ModuleInstance* import_module;
-  CHECK_RESULT(FindRegisteredModule(module_name, &import_module));
-
   Export* export_;
-  CHECK_RESULT(GetModuleExport(import_module, field_name, &export_));
-  CHECK_RESULT(CheckImportKind(module_name, field_name, ExternalKind::Global, export_->kind));
+  CHECK_RESULT(ResolveImport(import_index, ExternalKind::Global,
+                             module_name, field_name, 0, &export_));
 
   Global* exported_global = env_->GetGlobal(export_->index);
   if (Failed(typechecker_.CheckType(type, exported_global->typed_value.type))) {
@@ -946,16 +954,16 @@ wabt::Result BinaryReaderInterp::BeginGlobal(Index index,
                                              Type type,
                                              bool mutable_) {
   assert(TranslateGlobalIndexToEnv(index) == env_->GetGlobalCount());
-  env_->EmplaceBackGlobal(TypedValue(type), mutable_);
+  env_->EmplaceBackGlobal(type, mutable_);
   init_expr_value_.type = Type::Void;
   return wabt::Result::Ok;
 }
 
 wabt::Result BinaryReaderInterp::EndGlobalInitExpr(Index index) {
   Global* global = GetGlobalByModuleIndex(index);
-  if (Failed(typechecker_.CheckType(init_expr_value_.type, global->typed_value.type))) {
+  if (Failed(typechecker_.CheckType(init_expr_value_.type, global->type))) {
     PrintError("type mismatch in global, expected %s but got %s.",
-               GetTypeName(global->typed_value.type),
+               GetTypeName(global->type),
                GetTypeName(init_expr_value_.type));
     return wabt::Result::Error;
   }
@@ -1656,7 +1664,7 @@ wabt::Result BinaryReaderInterp::OnGlobalSetExpr(Index global_index) {
                global_index);
     return wabt::Result::Error;
   }
-  CHECK_RESULT(typechecker_.OnGlobalSet(global->typed_value.type));
+  CHECK_RESULT(typechecker_.OnGlobalSet(global->type));
   CHECK_RESULT(EmitOpcode(Opcode::GlobalSet));
   CHECK_RESULT(EmitI32(TranslateGlobalIndexToEnv(global_index)));
   return wabt::Result::Ok;
@@ -1934,23 +1942,64 @@ wabt::Result BinaryReaderInterp::InitializeSegments() {
   return wabt::Result::Ok;
 }
 
+class BinaryReaderMetadata : public BinaryReaderNop {
+ public:
+  BinaryReaderMetadata(ModuleMetadata* metadata,
+                       Errors* errors,
+                       const Features& features) : metadata_(metadata) {
+  }
+  wabt::Result OnImport(Index index,
+                        ExternalKind kind,
+                        string_view module_name,
+                        string_view field_name) override {
+    metadata_->imports.emplace_back(kind, module_name, field_name);
+    return wabt::Result::Ok;
+  }
+
+  wabt::Result OnExport(Index index,
+                        ExternalKind kind,
+                        Index item_index,
+                        string_view name) override {
+    metadata_->exports.emplace_back(name, kind, item_index);
+    return wabt::Result::Ok;
+  }
+
+ private:
+  ModuleMetadata* metadata_;
+};
+
 }  // end anonymous namespace
 
+wabt::Result ReadBinaryMetadata(const void* data,
+                                size_t size,
+                                const ReadBinaryOptions& options,
+                                Errors* errors,
+                                ModuleMetadata** out_metadata) {
+  ModuleMetadata* metadata = new ModuleMetadata();
+  BinaryReaderMetadata reader(metadata, errors, options.features);
+  wabt::Result result = ReadBinary(data, size, &reader, options);
+  if (!Succeeded(result)) {
+    delete metadata;
+    return result;
+  }
+  *out_metadata = metadata;
+  return result;
+}
 wabt::Result ReadBinaryInterp(Environment* env,
                               const void* data,
                               size_t size,
                               const ReadBinaryOptions& options,
+                              const std::vector<Export*>& imports,
                               Errors* errors,
-                              Module** out_module,
                               DefinedModule** out_module_instance) {
   // Need to mark before taking ownership of env->istream.
   Environment::MarkPoint mark = env->Mark();
 
   std::unique_ptr<OutputBuffer> istream = env->ReleaseIstream();
   IstreamOffset istream_offset = istream->size();
-  DefinedModule* module = new DefinedModule();
+  DefinedModule* module = new DefinedModule(env);
 
-  BinaryReaderInterp reader(env, module, std::move(istream), errors,
+  BinaryReaderInterp reader(env, module, std::move(istream), imports, errors,
                             options.features);
   env->EmplaceBackModule(module);
 
@@ -1958,13 +2007,10 @@ wabt::Result ReadBinaryInterp(Environment* env,
   env->SetIstream(reader.ReleaseOutputBuffer());
 
   if (Succeeded(result)) {
-    Module* mod = new Module();
-    mod->istream_start = istream_offset;
-    mod->istream_end = env->istream().size();
-    *out_module = mod;
-
     result = reader.InitializeSegments();
     if (Succeeded(result)) {
+      module->istream_start = istream_offset;
+      module->istream_end = env->istream().size();
       *out_module_instance = module;
     } else {
       // We failed to initialize data and element segments, but we can't reset
@@ -1978,6 +2024,17 @@ wabt::Result ReadBinaryInterp(Environment* env,
   }
 
   return result;
+}
+
+wabt::Result ReadBinaryInterp(Environment* env,
+                              const void* data,
+                              size_t size,
+                              const ReadBinaryOptions& options,
+                              Errors* errors,
+                              DefinedModule** out_module_instance) {
+
+  std::vector<Export*> empty_imports;
+  return ReadBinaryInterp(env, data, size, options, empty_imports, errors, out_module_instance);
 }
 
 }  // namespace wabt

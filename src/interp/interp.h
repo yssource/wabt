@@ -90,14 +90,14 @@ static const IstreamOffset kInvalidIstreamOffset = ~0;
 
 struct FuncSignature {
   FuncSignature() = default;
-  FuncSignature(std::vector<Type> param_types, std::vector<Type> result_types);
+  FuncSignature(TypeVector param_types, TypeVector result_types);
   FuncSignature(Index param_count,
                 Type* param_types,
                 Index result_count,
                 Type* result_types);
 
-  std::vector<Type> param_types;
-  std::vector<Type> result_types;
+  TypeVector param_types;
+  TypeVector result_types;
 };
 
 struct Ref {
@@ -200,12 +200,13 @@ typedef std::vector<TypedValue> TypedValues;
 
 struct Global {
   Global() : mutable_(false), import_index(kInvalidIndex) {}
-  Global(const TypedValue& typed_value, bool mutable_)
-      : typed_value(typed_value), mutable_(mutable_) {}
+  Global(Type& type, bool mutable_)
+      : type(type), mutable_(mutable_) {}
 
+  Type type;
   TypedValue typed_value;
   bool mutable_;
-  Index import_index; /* or INVALID_INDEX if not imported */
+  Index import_index = kInvalidIndex; /* kInvalidIndex if not imported */
 };
 
 struct Import {
@@ -266,6 +267,8 @@ struct HostFunc : Func {
   Callback callback;
 };
 
+class Environment;
+
 struct Export {
   Export(string_view name, ExternalKind kind, Index index)
       : name(name.to_string()), kind(kind), index(index) {}
@@ -275,19 +278,17 @@ struct Export {
   Index index;
 };
 
-class Environment;
-
-struct Module {
-  WABT_DISALLOW_COPY_AND_ASSIGN(Module);
-  Module();
-  IstreamOffset istream_start;
-  IstreamOffset istream_end;
+struct ModuleMetadata {
+  WABT_DISALLOW_COPY_AND_ASSIGN(ModuleMetadata);
+  ModuleMetadata();
+  std::vector<Import> imports;
+  std::vector<Export> exports;
 };
 
 struct ModuleInstance {
   WABT_DISALLOW_COPY_AND_ASSIGN(ModuleInstance);
-  explicit ModuleInstance(bool is_host);
-  ModuleInstance(string_view name, bool is_host);
+  ModuleInstance(Environment* env, bool is_host);
+  ModuleInstance(Environment* env, string_view name, bool is_host);
   virtual ~ModuleInstance() = default;
 
   // Function exports are special-cased to allow for overloading functions by
@@ -305,10 +306,11 @@ struct ModuleInstance {
   Index memory_index; /* kInvalidIndex if not defined */
   Index table_index;  /* kInvalidIndex if not defined */
   bool is_host;
+  Environment* env;
 };
 
 struct DefinedModule : ModuleInstance {
-  DefinedModule();
+  DefinedModule(Environment* env);
   static bool classof(const ModuleInstance* module) { return !module->is_host; }
 
   Index OnUnknownFuncExport(string_view name, Index sig_index) override {
@@ -316,6 +318,8 @@ struct DefinedModule : ModuleInstance {
   }
 
   Index start_func_index; /* kInvalidIndex if not defined */
+  IstreamOffset istream_start;
+  IstreamOffset istream_end;
 };
 
 struct HostModule : ModuleInstance {
@@ -357,9 +361,6 @@ struct HostModule : ModuleInstance {
   std::function<
       Index(Environment*, HostModule*, string_view name, Index sig_index)>
       on_unknown_func_export;
-
- private:
-  Environment* env_;
 };
 
 class Environment {
@@ -501,7 +502,7 @@ class Environment {
   void ResetToMarkPoint(const MarkPoint&);
 
   void Disassemble(Stream* stream, IstreamOffset from, IstreamOffset to);
-  void DisassembleModule(Stream* stream, Module*);
+  void DisassembleModule(Stream* stream, DefinedModule*);
 
   // Called when a module name isn't found in registered_module_bindings_. If
   // you want to provide a module with this name, call AppendHostModule() with
