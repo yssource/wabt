@@ -918,7 +918,12 @@ Result WastParser::ParseDataModuleField(Module* module) {
   if (ParseVarOpt(&field->data_segment.memory_var, Var(0, loc))) {
     CHECK_RESULT(ParseOffsetExpr(&field->data_segment.offset));
   } else if (!ParseOffsetExprOpt(&field->data_segment.offset)) {
-    field->data_segment.passive = true;
+    if (options_->features.bulk_memory_enabled()) {
+      field->data_segment.passive = true;
+    } else {
+      Error(loc, "passive data segments are not allowed");
+      return Result::Error;
+    }
   }
 
   ParseTextListOpt(&field->data_segment.data);
@@ -945,6 +950,7 @@ Result WastParser::ParseElemModuleField(Module* module) {
   auto field = MakeUnique<ElemSegmentModuleField>(loc, segment_name);
 
   if (ParseRefTypeOpt(&field->elem_segment.elem_type)) {
+    // TODO: Don't allow unless bulk memory is enabled.
     field->elem_segment.passive = true;
     // Parse a potentially empty sequence of ElemExprs.
     while (true) {
