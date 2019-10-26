@@ -51,7 +51,6 @@
 )
 
 (;; STDOUT ;;;
-
 function f(a:int, b:int):int {
   var c:long = 8L;
   var d:float = 6f;
