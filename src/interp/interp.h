@@ -100,15 +100,21 @@ struct FuncSignature {
   std::vector<Type> result_types;
 };
 
+struct Ref {
+  ExternalKind kind;
+  Index index;
+};
+
 struct Table {
   explicit Table(Type elem_type, const Limits& limits)
       : elem_type(elem_type),
         limits(limits),
-        func_indexes(limits.initial, kInvalidIndex) {}
+        entries(limits.initial, {ExternalKind::Func, kInvalidIndex}) {}
+  size_t size() const { return entries.size(); }
 
   Type elem_type;
   Limits limits;
-  std::vector<Index> func_indexes;
+  std::vector<Ref> entries;
 };
 
 struct Memory {
@@ -130,7 +136,7 @@ struct DataSegment {
 struct ElemSegment {
   ElemSegment() = default;
 
-  std::vector<Index> elems;
+  std::vector<Ref> elems;
   bool dropped = false;
 };
 
@@ -139,6 +145,7 @@ struct ElemSegment {
 template <typename T>
 struct ValueTypeRepT;
 
+template <> struct ValueTypeRepT<Ref> { typedef Ref type; };
 template <> struct ValueTypeRepT<int32_t> { typedef uint32_t type; };
 template <> struct ValueTypeRepT<uint32_t> { typedef uint32_t type; };
 template <> struct ValueTypeRepT<int64_t> { typedef uint64_t type; };
@@ -156,6 +163,7 @@ union Value {
   ValueTypeRep<float> f32_bits;
   ValueTypeRep<double> f64_bits;
   ValueTypeRep<v128> v128_bits;
+  Ref ref;
 };
 
 struct TypedValue {
@@ -164,11 +172,13 @@ struct TypedValue {
   TypedValue(Type type, const Value& value) : type(type), value(value) {}
 
   void SetZero() { ZeroMemory(value); }
+  void set_ref(Ref x) { value.ref = x; }
   void set_i32(uint32_t x) { value.i32 = x; }
   void set_i64(uint64_t x) { value.i64 = x; }
   void set_f32(float x) { memcpy(&value.f32_bits, &x, sizeof(x)); }
   void set_f64(double x) { memcpy(&value.f64_bits, &x, sizeof(x)); }
 
+  Ref get_ref() const { return value.ref; }
   uint32_t get_i32() const { return value.i32; }
   uint64_t get_i64() const { return value.i64; }
   float get_f32() const {
@@ -248,8 +258,6 @@ struct EventImport : Import {
   EventImport(string_view module_name, string_view field_name)
       : Import(ExternalKind::Event, module_name, field_name) {}
 };
-
-struct Func;
 
 struct Func {
   WABT_DISALLOW_COPY_AND_ASSIGN(Func);
@@ -651,8 +659,11 @@ class Thread {
   Result MemoryCopy(const uint8_t** pc) WABT_WARN_UNUSED;
   Result MemoryFill(const uint8_t** pc) WABT_WARN_UNUSED;
   Result TableInit(const uint8_t** pc) WABT_WARN_UNUSED;
+  Result TableGet(const uint8_t** pc) WABT_WARN_UNUSED;
+  Result TableSet(const uint8_t** pc) WABT_WARN_UNUSED;
   Result ElemDrop(const uint8_t** pc) WABT_WARN_UNUSED;
   Result TableCopy(const uint8_t** pc) WABT_WARN_UNUSED;
+  Result RefFunc(const uint8_t** pc) WABT_WARN_UNUSED;
 
   template <typename R, typename T = R>
   Result Unop(UnopFunc<R, T> func) WABT_WARN_UNUSED;
